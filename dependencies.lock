@@ -1,9 +1,15 @@
 dependencies:
+  espressif/esp_jpeg:
+    component_hash: 257714f4bd0d8258a122d57715e6ba166de858d6d49d5fb8e70263d5069d8568
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 1.0.5~2
   idf:
     component_hash: null
     source:
       type: idf
     version: 5.1.2
-manifest_hash: e023b62fb57161d665f768ebb4c2eb21a8ff31ea03629dd60ddcadacde420e6a
+manifest_hash: a27f46f9db2c58942d3da668189209920f7b678ede567e7a8336ef7266fab142
 target: esp32
 version: 1.0.0
