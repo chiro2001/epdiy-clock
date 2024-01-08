@@ -21,6 +21,7 @@ JDEC jd;
 JRESULT rc;
 // PNG decoder
 pngle_t *pngle = NULL;
+uint8_t render_pixel_skip = 0xff;
 
 // time
 int64_t time_download_start;
@@ -140,8 +141,25 @@ void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     uint32_t b = rgba[2]; // 0 - 255
     uint32_t a = rgba[3]; // 0: fully transparent, 255: fully opaque
 
-    int padding_x = (epd_rotated_display_width() - pngle_get_width(pngle)) / 2;
-    int padding_y = (epd_rotated_display_height() - pngle_get_height(pngle)) / 2;
+    uint32_t image_width = pngle_get_width(pngle);
+    uint32_t image_height = pngle_get_height(pngle);
+    int epd_width = epd_rotated_display_width();
+    int epd_height = epd_rotated_display_height();
+
+    if (render_pixel_skip == 0xff) {
+        render_pixel_skip = 0;
+        if (image_width > epd_width * 2 || image_height > epd_height * 2) {
+            render_pixel_skip = 2;
+        }
+        return;
+    }
+    if (render_pixel_skip) {
+        image_width = image_width / render_pixel_skip;
+        image_height = image_height / render_pixel_skip;
+    }
+
+    int padding_x = (epd_width - image_width) / 2;
+    int padding_y = (epd_height - image_height) / 2;
 
     // if (a == 0) {
     //     // skip transparent pixels
@@ -161,9 +179,23 @@ void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     //     x, y, w, h, r, g, b, a, val, padding_x, padding_y, color);
     // cnt++;
 
-    for (uint32_t yy = 0; yy < h; yy++) {
-        for (uint32_t xx = 0; xx < w; xx++) {
-            epd_draw_pixel(xx + x + padding_x, yy + y + padding_y, color, fb);
+    if (render_pixel_skip == 0) {
+        for (uint32_t yy = 0; yy < h; yy++) {
+            for (uint32_t xx = 0; xx < w; xx++) {
+                epd_draw_pixel(xx + x + padding_x, yy + y + padding_y, color, fb);
+            }
+        }
+    } else {
+        for (uint32_t yy = 0; yy < h; yy++) {
+            for (uint32_t xx = 0; xx < w; xx++) {
+                int xxx = xx + x;
+                int yyy = yy + y;
+                if (xxx % render_pixel_skip != 0 || yyy % render_pixel_skip != 0) {
+                    continue;
+                }
+                epd_draw_pixel(xxx / render_pixel_skip + padding_x, 
+                yyy / render_pixel_skip + padding_y, color, fb);
+            }
         }
     }
 }
