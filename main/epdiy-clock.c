@@ -186,14 +186,14 @@ esp_err_t draw_jpeg_file(const char *filename) {
     }
 
     uint32_t decode_start = esp_timer_get_time();
-
+    vTaskDelay(0);
     // Last parameter scales        v 1 will reduce the image
     rc = jd_decomp(&jd, tjd_output, 0);
     if (rc != JDR_OK) {
         ESP_LOGE(TAG, "JPG jd_decomp error: %s", jd_errors[rc]);
         return ESP_FAIL;
     }
-
+    vTaskDelay(0);
     time_decomp = (esp_timer_get_time() - decode_start) / 1000;
 
     ESP_LOGI("JPG", "width: %d height: %d", jd.width, jd.height);
@@ -362,11 +362,11 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             break;
         case HTTP_EVENT_ON_DATA:
             ++on_data_cnt;
-#if DEBUG_VERBOSE
+// #if DEBUG_VERBOSE
             if (on_data_cnt % 10 == 0) {
                 ESP_LOGI(TAG, "%d len:%d %d%%", on_data_cnt, evt->data_len, data_recv * 100 / data_len_total);
             }
-#endif
+// #endif
             // should be allocated after the Content-Length header was received.
             // assert(source_buf != NULL);
 
@@ -624,19 +624,24 @@ void finish_system(void) {
 
 esp_err_t download_image() {
     // handle http request
-    esp_err_t r = http_request();
+    // esp_err_t r = http_request();
     // esp_err_t r = https_request();
-    if (r != ESP_OK) {
-        ESP_LOGE(TAG, "http_post failed, obtain time and retrying");
-        fetch_and_store_time_in_nvs(NULL);
-        print_time();
+    esp_err_t r;
+    int retry = 3;
+    do {
+        retry--;
         r = http_request();
-        // r = https_request();
-    }
-// #if MILLIS_DELAY_BEFORE_SLEEP > 0
-//     vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
-// #endif
-//     finish_system();
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "http_post failed, retrying, retry: %d", retry);
+            if (retry == 0) {
+                break;
+            }
+            fetch_and_store_time_in_nvs(NULL);
+            print_time();
+        } else {
+            break;
+        }
+    } while (r != ESP_OK && retry > 0);
     return r;
 }
 
@@ -728,13 +733,13 @@ void app_main(void) {
     wifi_init_sta();
 
     print_time();
-    // // auto request and save time in NVS
-    // if (esp_reset_reason() == ESP_RST_POWERON) {
-    //     fetch_and_store_time_in_nvs(NULL);
-    // }
-    // update_time_from_nvs();
-    // // print time now
-    // print_time();
+    // auto request and save time in NVS
+    if (esp_reset_reason() == ESP_RST_POWERON) {
+        fetch_and_store_time_in_nvs(NULL);
+    }
+    update_time_from_nvs();
+    // print time now
+    print_time();
 
     epd_poweron();
 
@@ -783,4 +788,5 @@ void app_main(void) {
     // then display current image, or fallback
     // xTaskCreate(do_display, "do_display", 8192, NULL, 5, NULL);
     do_display(filename_current_image);
+    finish_system();
 }

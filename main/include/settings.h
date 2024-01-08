@@ -12,11 +12,12 @@
 #define EPDIY_USE_HIMEM 1
 
 /// Deepsleep configuration
-#define MILLIS_DELAY_BEFORE_SLEEP 2000
+// #define MILLIS_DELAY_BEFORE_SLEEP 2000
 #define DEEPSLEEP_MINUTES_AFTER_RENDER 6
 
 /// ssl
-#define VALIDATE_SSL_CERTIFICATE 1
+// #define VALIDATE_SSL_CERTIFICATE 1
+#define VALIDATE_SSL_CERTIFICATE 0
 
 /// source
 // #define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
@@ -24,6 +25,9 @@
 
 #define IMG_URL "https://img.moehu.org/pic.php?id=img1"
 #define IMG_HOST "img.moehu.org"
+
+// #define IMG_URL "https://loremflickr.com/1448/1072"
+// #define IMG_HOST "loremflickr.com"
 
 // #define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
 // #define IMG_HOST "192.168.31.141"
@@ -41,8 +45,10 @@
 /// network
 #define HTTP_RECEIVE_BUFFER_SIZE 1986
 // plz set CONFIG_LWIP_SNTP_MAX_SERVERS=3
-#define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3, \
-                          ESP_SNTP_SERVER_LIST("cn.pool.ntp.org", "time.windows.com", "ntp.chiro.work") )
+// #define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3,
+//                           ESP_SNTP_SERVER_LIST("ntp.chiro.work", "cn.pool.ntp.org", "time.windows.com") )
+#define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(1, \
+                          ESP_SNTP_SERVER_LIST("ntp.chiro.work") )
 #define HTTP_RECEIVE_TIMEOUT_MS (30 * 1000)
 
 /// storage
