@@ -26,16 +26,22 @@
 #include "lwip/dns.h"
 #include "time_sync.h"
 
+#include "settings.h"
+
 static const char *TAG = "time_sync";
 
 #define STORAGE_NAMESPACE "storage"
 
 void initialize_sntp(void)
 {
+    static bool initialized = false;
+    if (initialized) {
+        return;
+    }
     ESP_LOGI(TAG, "Initializing SNTP");
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(2,
-                               ESP_SNTP_SERVER_LIST("time.windows.com", "pool.ntp.org" ) );
+    esp_sntp_config_t config = NTP_SERVER_CONFIG;
     esp_netif_sntp_init(&config);
+    initialized = true;
 }
 
 static esp_err_t obtain_time(void)

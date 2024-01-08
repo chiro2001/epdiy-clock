@@ -30,6 +30,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "time_sync.h"
+#include "esp_tls.h"
 // epdiy
 #include "epdiy.h"
 #include "epd_highlevel.h"

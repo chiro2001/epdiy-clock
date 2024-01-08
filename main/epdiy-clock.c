@@ -1,20 +1,24 @@
 #include "common.h"
-#include "esp_log.h"
-#include "pngle.h"
+#include "esp_err.h"
 
 /// global variables
 
 EpdiyHighlevelState hl;
+uint32_t data_len_total = 0;
+// #define TAG "eclock"
+const static char *TAG = "eclock";
 
 // buffers
 uint8_t* source_buf = NULL;       // downloaded image
 static uint8_t tjpgd_work[3096];  // tjpgd 3096 is the minimum size
 uint8_t* fb;                      // EPD 2bpp buffer
+static uint32_t feed_buffer_pos = 0;
 
 // Load the EMBED_TXTFILES. Then doing (char*) server_cert_pem_start you get the SSL certificate
 // Reference:
 // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html#embedding-binary-data
 extern const uint8_t server_cert_pem_start[] asm("_binary_server_cert_pem_start");
+extern const uint8_t server_cert_pem_end[] asm("_binary_server_cert_pem_end");
 
 // JPEG decoder
 JDEC jd;
@@ -98,20 +102,20 @@ static uint32_t feed_buffer(
     uint32_t nd
 ) {
     uint32_t count = 0;
-    static uint32_t buffer_pos = 0;
 
     while (count < nd) {
         if (buff != NULL) {
-            *buff++ = source_buf[buffer_pos];
+            *buff++ = source_buf[feed_buffer_pos];
         }
         count++;
-        buffer_pos++;
+        feed_buffer_pos++;
     }
 
     return count;
 }
 
 int draw_jpeg(uint8_t* source_buf) {
+    feed_buffer_pos = 0;
     rc = jd_prepare(&jd, feed_buffer, tjpgd_work, sizeof(tjpgd_work), &source_buf);
     if (rc != JDR_OK) {
         ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
@@ -221,10 +225,32 @@ int draw_png(uint8_t* source_buf, size_t size) {
     return r;
 }
 
+esp_err_t display_source_buf() {
+    ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
+    int r = draw_jpeg(source_buf);
+    if (r == ESP_FAIL) {
+        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        r = draw_png(source_buf, data_len_total);
+    }
+    if (r == ESP_FAIL) {
+        ESP_LOGE(TAG, "draw as png failed");
+        return ESP_FAIL;
+    }
+    time_download = (esp_timer_get_time() - time_download_start) / 1000;
+    ESP_LOGI("www-dw", "%" PRIu32 " ms - download", time_download);
+    // Refresh display
+    epd_hl_update_screen(&hl, MODE_GC16, 25);
+
+    ESP_LOGI(
+        "total", "%" PRIu32 " ms - total time spent\n",
+        time_download + time_decomp + time_render
+    );
+    return ESP_OK;
+}
+
 // Handles Htpp events and is in charge of buffering source_buf (jpg compressed image)
 esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     static uint32_t data_recv = 0;
-    static uint32_t data_len_total = 0;
     static uint32_t on_data_cnt = 0;
     switch (evt->event_id) {
         case HTTP_EVENT_ERROR:
@@ -279,25 +305,12 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_ON_FINISH:
             // Do not draw if it's a redirect (302)
             if (esp_http_client_get_status_code(evt->client) == 200) {
-                printf("%" PRIu32 " bytes read from %s\n\n", data_recv, IMG_URL);
-                int r = draw_jpeg(source_buf);
-                if (r == ESP_FAIL) {
-                    ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
-                    r = draw_png(source_buf, data_recv);
+                data_len_total = data_recv;
+                esp_err_t r = display_source_buf();
+                if (r != ESP_OK) {
+                    ESP_LOGE(TAG, "display_source_buf failed");
+                    return r;
                 }
-                if (r == ESP_FAIL) {
-                    ESP_LOGE(TAG, "draw as png failed");
-                    return ESP_FAIL;
-                }
-                time_download = (esp_timer_get_time() - time_download_start) / 1000;
-                ESP_LOGI("www-dw", "%" PRIu32 " ms - download", time_download);
-                // Refresh display
-                epd_hl_update_screen(&hl, MODE_GC16, 25);
-
-                ESP_LOGI(
-                    "total", "%" PRIu32 " ms - total time spent\n",
-                    time_download + time_decomp + time_render
-                );
             }
             break;
 
@@ -311,8 +324,148 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     return ESP_OK;
 }
 
+static const char HOWSMYSSL_REQUEST[] = "GET " IMG_URL " HTTP/1.1\r\n"
+                             "Host: " IMG_HOST "\r\n"
+                             "User-Agent: esp-idf/1.0 esp32\r\n"
+                             "\r\n";
+
+static esp_err_t https_get_request(esp_tls_cfg_t cfg, const char *url, const char *REQUEST, char **res_buf, uint32_t *ret_len) {
+    char buf[512];
+    int ret, len;
+    size_t recv_len = 0;
+    esp_err_t err = ESP_OK;
+
+    assert(res_buf);
+
+    esp_tls_t *tls = esp_tls_init();
+    if (!tls) {
+        ESP_LOGE(TAG, "Failed to allocate esp_tls handle!");
+        err = ESP_FAIL;
+        goto exit;
+    }
+
+    if (esp_tls_conn_http_new_sync(url, &cfg, tls) == 1) {
+        ESP_LOGI(TAG, "Connection established...");
+    } else {
+        ESP_LOGE(TAG, "Connection failed...");
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+
+#ifdef CONFIG_EXAMPLE_CLIENT_SESSION_TICKETS
+    /* The TLS session is successfully established, now saving the session ctx for reuse */
+    if (save_client_session) {
+        esp_tls_free_client_session(tls_client_session);
+        tls_client_session = esp_tls_get_client_session(tls);
+    }
+#endif
+
+    size_t written_bytes = 0;
+    do {
+        ret = esp_tls_conn_write(tls,
+                                 REQUEST + written_bytes,
+                                 strlen(REQUEST) - written_bytes);
+        if (ret >= 0) {
+            ESP_LOGI(TAG, "%d bytes written", ret);
+            written_bytes += ret;
+        } else if (ret != ESP_TLS_ERR_SSL_WANT_READ  && ret != ESP_TLS_ERR_SSL_WANT_WRITE) {
+            ESP_LOGE(TAG, "esp_tls_conn_write  returned: [0x%02X](%s)", ret, esp_err_to_name(ret));
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+    } while (written_bytes < strlen(REQUEST));
+
+    ESP_LOGI(TAG, "Reading HTTP response...");
+    ssize_t bytes_to_read;
+    if ((bytes_to_read = esp_tls_get_bytes_avail(tls)) <= 0) {
+        ESP_LOGE(TAG, "esp_tls_get_bytes_avail  returned: [0x%02X](%s)", ret, esp_err_to_name(ret));
+        err = ESP_FAIL;
+        goto cleanup;
+    }
+    if (!*res_buf) {
+        ESP_LOGI(TAG, "Allocating %d bytes of memory...", bytes_to_read);
+        *res_buf = (char*)heap_caps_malloc(bytes_to_read, MALLOC_CAP_SPIRAM);
+        if (!*res_buf) {
+            ESP_LOGE(TAG, "Failed to allocate memory for res_buf");
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+    }
+    do {
+        len = sizeof(buf) - 1;
+        memset(buf, 0x00, len);
+        ret = esp_tls_conn_read(tls, (char *)buf, len);
+
+        if (ret == ESP_TLS_ERR_SSL_WANT_WRITE  || ret == ESP_TLS_ERR_SSL_WANT_READ) {
+            continue;
+        } else if (ret < 0) {
+            ESP_LOGE(TAG, "esp_tls_conn_read  returned [-0x%02X](%s)", -ret, esp_err_to_name(ret));
+            break;
+        } else if (ret == 0) {
+            ESP_LOGI(TAG, "connection closed");
+            break;
+        }
+
+        len = ret;
+        ESP_LOGD(TAG, "%d bytes read", len);
+        memcpy((*res_buf) + recv_len, buf, len);
+        recv_len += len;
+    } while (1);
+
+cleanup:
+    esp_tls_conn_destroy(tls);
+    *ret_len = recv_len;
+exit:
+    return err;
+}
+
+static esp_err_t https_get_request_using_cacert_buf(void)
+{
+    ESP_LOGI(TAG, "https_request using cacert_buf");
+    esp_tls_cfg_t cfg = {
+        .cacert_buf = (const unsigned char *) server_cert_pem_start,
+        .cacert_bytes = server_cert_pem_end - server_cert_pem_start,
+    };
+    return https_get_request(cfg, IMG_URL, HOWSMYSSL_REQUEST, (char**)&source_buf, &data_len_total);
+}
+
+static esp_err_t https_get_request_using_global_ca_store(void)
+{
+    esp_err_t esp_ret = ESP_FAIL;
+    ESP_LOGI(TAG, "https_request using global ca_store");
+    esp_ret = esp_tls_set_global_ca_store(server_cert_pem_start, server_cert_pem_end - server_cert_pem_start);
+    if (esp_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Error in setting the global ca store: [%02X] (%s),could not complete the https_request using global_ca_store", esp_ret, esp_err_to_name(esp_ret));
+        return esp_ret;
+    }
+    esp_tls_cfg_t cfg = {
+        .use_global_ca_store = true,
+    };
+    esp_ret = https_get_request(cfg, IMG_URL, HOWSMYSSL_REQUEST, (char**)&source_buf, &data_len_total);
+    esp_tls_free_global_ca_store();
+    return esp_ret;
+}
+
+static esp_err_t https_request(void) {
+    esp_err_t r = ESP_FAIL;
+    printf("SSL CERT:\n%s\n\n", (char*)server_cert_pem_start);
+    ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
+    // r = https_get_request_using_cacert_buf();
+    r = https_get_request_using_global_ca_store();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "https_get_request failed");
+        return r;
+    }
+    r = display_source_buf();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "display_source_buf failed");
+        return r;
+    }
+    return ESP_OK;
+}
+
 // Handles http request
-static void http_post(void) {
+static esp_err_t http_request(void) {
     /**
      * NOTE: All the configuration parameters for http_client must be specified
      * either in URL or as host and path parameters.
@@ -350,13 +503,7 @@ static void http_post(void) {
     }
 
     esp_http_client_cleanup(client);
-
-#if MILLIS_DELAY_BEFORE_SLEEP > 0
-    vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
-#endif
-    printf("Go to sleep %d minutes\n", DEEPSLEEP_MINUTES_AFTER_RENDER);
-    epd_poweroff();
-    deepsleep();
+    return err;
 }
 
 void print_time() {
@@ -398,6 +545,9 @@ void app_main(void) {
     wifi_init_sta();
 
     // auto request and save time in NVS
+    if (esp_reset_reason() == ESP_RST_POWERON) {
+        fetch_and_store_time_in_nvs(NULL);
+    }
     update_time_from_nvs();
     // print time now
     print_time();
@@ -406,5 +556,19 @@ void app_main(void) {
     epd_fullclear(&hl, TEMPERATURE);
 
     // handle http request
-    http_post();
+    // esp_err_t r = http_request();
+    esp_err_t r = https_request();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "http_post failed, obtain time and retrying");
+        fetch_and_store_time_in_nvs(NULL);
+        print_time();
+        // r = http_request();
+        r = https_request();
+    }
+    #if MILLIS_DELAY_BEFORE_SLEEP > 0
+    vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
+#endif
+    printf("Go to sleep %d minutes\n", DEEPSLEEP_MINUTES_AFTER_RENDER);
+    epd_poweroff();
+    deepsleep();
 }
