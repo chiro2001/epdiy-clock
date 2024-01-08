@@ -16,10 +16,11 @@ const static char *TAG = "eclock";
 #define DEEPSLEEP_MINUTES_AFTER_RENDER 6
 
 /// ssl
-#define VALIDATE_SSL_CERTIFICATE 0
+#define VALIDATE_SSL_CERTIFICATE 1
 
 /// source
-#define IMG_URL ("http://192.168.31.141:8080/65535_52696514520_251e54d908_k_1280_947_nofilter.jpg")
+#define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
+// #define IMG_URL ("https://loremflickr.com/1448/1072")
 
 /// image decode
 #define JPG_DITHERING 0

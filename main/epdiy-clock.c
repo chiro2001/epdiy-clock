@@ -280,7 +280,7 @@ static void http_post(void) {
         .buffer_size = HTTP_RECEIVE_BUFFER_SIZE,
         .disable_auto_redirect = false,
         .timeout_ms = HTTP_RECEIVE_TIMEOUT_MS,
-#if VALIDATE_SSL_CERTIFICATE == true
+#if VALIDATE_SSL_CERTIFICATE
         .cert_pem = (char*)server_cert_pem_start
 #endif
     };
@@ -343,9 +343,9 @@ void app_main(void) {
 
     // Initialization: WiFi + clean screen while downloading image
     wifi_init_sta();
-#if VALIDATE_SSL_CERTIFICATE == true
+// #if VALIDATE_SSL_CERTIFICATE
     obtain_time();
-#endif
+// #endif
     epd_poweron();
     epd_fullclear(&hl, TEMPERATURE);
 

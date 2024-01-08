@@ -1,7 +1,7 @@
-file(GLOB SRCS *.c)
+file(GLOB app_sources *.c)
 
 idf_component_register(
-  SRCS ${SRCS}
+  SRCS ${app_sources}
   INCLUDE_DIRS "."
   REQUIRES 
     epdiy
@@ -10,6 +10,7 @@ idf_component_register(
     nvs_flash esp-tls esp_http_client
     esp_app_format
     esp_wifi
+  EMBED_TXTFILES ${project_dir}/ssl_cert/server_cert.pem
 )
 
 # make compliler happy
