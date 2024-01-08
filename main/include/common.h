@@ -43,6 +43,7 @@
 #else  // ESP32 Before IDF 4.0
 #include "rom/tjpgd.h"
 #endif
+#include "pngle.h"
 
 void wifi_init_sta(void);
 void deepsleep();

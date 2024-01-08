@@ -10,8 +10,10 @@ idf_component_register(
     nvs_flash esp-tls esp_http_client
     esp_app_format
     esp_wifi
+    pngle
   EMBED_TXTFILES ${project_dir}/ssl_cert/server_cert.pem
 )
 
 # make compliler happy
-idf_build_set_property(COMPILE_OPTIONS "-Wformat=0" APPEND)
+# idf_build_set_property(COMPILE_OPTIONS "-Wformat=0" APPEND)
+component_compile_options(-Wno-error=format= -Wno-format)

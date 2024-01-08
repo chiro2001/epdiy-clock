@@ -19,8 +19,9 @@ const static char *TAG = "eclock";
 #define VALIDATE_SSL_CERTIFICATE 1
 
 /// source
-#define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
+// #define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
 // #define IMG_URL ("https://loremflickr.com/1448/1072")
+#define IMG_URL ("http://192.168.31.141:8080/eva/Nerv_04.png")
 
 /// image decode
 #define JPG_DITHERING 0

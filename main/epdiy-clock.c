@@ -1,5 +1,6 @@
 #include "common.h"
 #include "esp_log.h"
+#include "pngle.h"
 
 /// global variables
 
@@ -18,6 +19,8 @@ extern const uint8_t server_cert_pem_start[] asm("_binary_server_cert_pem_start"
 // JPEG decoder
 JDEC jd;
 JRESULT rc;
+// PNG decoder
+pngle_t *pngle = NULL;
 
 // time
 int64_t time_download_start;
@@ -58,8 +61,8 @@ static uint32_t tjd_output(
     uint8_t* bitmap_ptr = (uint8_t*)bitmap;
 
     // Write to display
-    uint32_t padding_x = (epd_rotated_display_width() - jd->width) / 2;
-    uint32_t padding_y = (epd_rotated_display_height() - jd->height) / 2;
+    int padding_x = (epd_rotated_display_width() - jd->width) / 2;
+    int padding_y = (epd_rotated_display_height() - jd->height) / 2;
     
     for (uint32_t i = 0; i < w * h; i++) {
         uint8_t r = *(bitmap_ptr++);
@@ -107,10 +110,7 @@ static uint32_t feed_buffer(
     return count;
 }
 
-//====================================================================================
-//   This function opens source_buf Jpeg image file and primes the decoder
-//====================================================================================
-int drawBufJpeg(uint8_t* source_buf, int xpos, int ypos) {
+int draw_jpeg(uint8_t* source_buf) {
     rc = jd_prepare(&jd, feed_buffer, tjpgd_work, sizeof(tjpgd_work), &source_buf);
     if (rc != JDR_OK) {
         ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
@@ -128,10 +128,65 @@ int drawBufJpeg(uint8_t* source_buf, int xpos, int ypos) {
 
     time_decomp = (esp_timer_get_time() - decode_start) / 1000;
 
-    ESP_LOGI("JPG", "width: %d height: %d\n", jd.width, jd.height);
+    ESP_LOGI("JPG", "width: %d height: %d", jd.width, jd.height);
     ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
 
-    return 1;
+    return 0;
+}
+
+void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t rgba[4]) {
+    uint32_t r = rgba[0]; // 0 - 255
+    uint32_t g = rgba[1]; // 0 - 255
+    uint32_t b = rgba[2]; // 0 - 255
+    uint32_t a = rgba[3]; // 0: fully transparent, 255: fully opaque
+
+    int padding_x = (epd_rotated_display_width() - pngle_get_width(pngle)) / 2;
+    int padding_y = (epd_rotated_display_height() - pngle_get_height(pngle)) / 2;
+
+    // if (a == 0) {
+    //     // skip transparent pixels
+    //     return;
+    // }
+
+    uint32_t val = (r * 38 + g * 75 + b * 15) >> 7;  // @vroland recommended formula
+    // use alpha in white background
+    val = (a == 0) ? 255 : val;
+    // val = (val * 256 / (256 - a)) & 0xff;
+    uint8_t color = gamme_curve[val];
+
+    // print info
+    // static int cnt = 0;
+    // if (cnt % 100 == 0)
+    //     ESP_LOGI("PNG", "x: %d y: %d w: %d h: %d r: %d g: %d b: %d a: %d val: %d px: %d py: %d color: %x", 
+    //     x, y, w, h, r, g, b, a, val, padding_x, padding_y, color);
+    // cnt++;
+
+    for (uint32_t yy = 0; yy < h; yy++) {
+        for (uint32_t xx = 0; xx < w; xx++) {
+            epd_draw_pixel(xx + x + padding_x, yy + y + padding_y, color, fb);
+        }
+    }
+}
+
+int draw_png(uint8_t* source_buf, size_t size) {
+    int r = 0;
+    uint32_t decode_start = esp_timer_get_time();
+    if (pngle != NULL) {
+        pngle_destroy(pngle);
+        pngle = NULL;
+    }
+    pngle = pngle_new();
+    pngle_set_draw_callback(pngle, on_draw_png);
+
+    r = pngle_feed(pngle, source_buf, size);
+    if (r < 0) {
+        ESP_LOGE(TAG, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
+        return ESP_FAIL;
+    }
+    time_decomp = (esp_timer_get_time() - decode_start) / 1000;
+    ESP_LOGI("PNG", "width: %d height: %d", pngle_get_width(pngle), pngle_get_height(pngle));
+    ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
+    return r;
 }
 
 // Handles Htpp events and is in charge of buffering source_buf (jpg compressed image)
@@ -193,8 +248,15 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             // Do not draw if it's a redirect (302)
             if (esp_http_client_get_status_code(evt->client) == 200) {
                 printf("%" PRIu32 " bytes read from %s\n\n", data_recv, IMG_URL);
-                drawBufJpeg(source_buf, 0, 0);
-                // drawBufJpeg2(source_buf, 0, 0);
+                int r = draw_jpeg(source_buf);
+                if (r == ESP_FAIL) {
+                    ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+                    r = draw_png(source_buf, data_recv);
+                }
+                if (r == ESP_FAIL) {
+                    ESP_LOGE(TAG, "draw as png failed");
+                    return ESP_FAIL;
+                }
                 time_download = (esp_timer_get_time() - time_download_start) / 1000;
                 ESP_LOGI("www-dw", "%" PRIu32 " ms - download", time_download);
                 // Refresh display
