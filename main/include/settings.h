@@ -6,7 +6,10 @@
 #define WAVEFORM EPD_BUILTIN_WAVEFORM
 #define DISPLAY_ROTATION EPD_ROT_LANDSCAPE
 #define DISPLAY_SCREEN_TYPE ED060KD1
+// #define DISPLAY_SCREEN_TYPE ED060XC3
 #define TEMPERATURE 25
+
+#define EPDIY_USE_HIMEM 1
 
 /// Deepsleep configuration
 #define MILLIS_DELAY_BEFORE_SLEEP 2000
@@ -19,10 +22,10 @@
 // #define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
 // #define IMG_URL ("https://loremflickr.com/1448/1072")
 
-// #define IMG_URL "https://img.moehu.org/pic.php?id=img1"
-// #define IMG_HOST "img.moehu.org"
-#define IMG_URL "https://www.howsmyssl.com/a/check"
-#define IMG_HOST "www.howsmyssl.com"
+#define IMG_URL "https://img.moehu.org/pic.php?id=img1"
+#define IMG_HOST "img.moehu.org"
+// #define IMG_URL "https://www.howsmyssl.com/a/check"
+// #define IMG_HOST "www.howsmyssl.com"
 
 
 /// image decode

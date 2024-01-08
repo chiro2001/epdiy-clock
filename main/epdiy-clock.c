@@ -269,16 +269,17 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             if (strncmp(evt->header_key, "Content-Length", 14) == 0) {
                 // Should be big enough to hold the JPEG file size
                 data_len_total = atol(evt->header_value);
-                ESP_LOGI("epdiy", "Allocating content buffer of length %X (%dKiB)", data_len_total, data_len_total / 1024);
-
-                source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_SPIRAM);
-                // source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_INTERNAL);
-
-                if (source_buf == NULL) {
-                    ESP_LOGE("main", "Initial alloc source_buf failed!");
+                if (data_len_total) {
+                    ESP_LOGI("epdiy", "Allocating content buffer of length %X (%dKiB)", data_len_total, data_len_total / 1024);
+                    source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_SPIRAM);
+                    // source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_INTERNAL);
+                    if (source_buf == NULL) {
+                        ESP_LOGE("main", "Initial alloc source_buf failed!");
+                    }
+                    printf("Free heap after buffers allocation: %X\n", xPortGetFreeHeapSize());
+                } else {
+                    ESP_LOGW("main", "Content-Length header is empty!");
                 }
-
-                printf("Free heap after buffers allocation: %X\n", xPortGetFreeHeapSize());
             }
 
             break;
@@ -378,11 +379,11 @@ static esp_err_t https_get_request(esp_tls_cfg_t cfg, const char *url, const cha
     ESP_LOGI(TAG, "Reading HTTP response...");
     ssize_t bytes_to_read;
     if ((bytes_to_read = esp_tls_get_bytes_avail(tls)) <= 0) {
-        ESP_LOGE(TAG, "esp_tls_get_bytes_avail  returned: [0x%02X](%s)", ret, esp_err_to_name(ret));
-        err = ESP_FAIL;
-        goto cleanup;
+        ESP_LOGE(TAG, "esp_tls_get_bytes_avail  returned: [0x%02X]", bytes_to_read);
+        // err = ESP_FAIL;
+        // goto cleanup;
     }
-    if (!*res_buf) {
+    if (!*res_buf && bytes_to_read) {
         ESP_LOGI(TAG, "Allocating %d bytes of memory...", bytes_to_read);
         *res_buf = (char*)heap_caps_malloc(bytes_to_read, MALLOC_CAP_SPIRAM);
         if (!*res_buf) {
@@ -408,7 +409,14 @@ static esp_err_t https_get_request(esp_tls_cfg_t cfg, const char *url, const cha
 
         len = ret;
         ESP_LOGD(TAG, "%d bytes read", len);
-        memcpy((*res_buf) + recv_len, buf, len);
+        if (*res_buf) {
+            memcpy((*res_buf) + recv_len, buf, len);
+        } else {
+            for (int i = 0; i < len; i++) {
+                putchar(buf[i]);
+            }
+            putchar('\n'); // JSON output doesn't have a newline at end
+        }
         recv_len += len;
     } while (1);
 
@@ -455,6 +463,10 @@ static esp_err_t https_request(void) {
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "https_get_request failed");
         return r;
+    }
+    if (!source_buf) {
+        ESP_LOGE(TAG, "source_buf is NULL");
+        return ESP_FAIL;
     }
     r = display_source_buf();
     if (r != ESP_OK) {
@@ -556,14 +568,14 @@ void app_main(void) {
     epd_fullclear(&hl, TEMPERATURE);
 
     // handle http request
-    // esp_err_t r = http_request();
-    esp_err_t r = https_request();
+    esp_err_t r = http_request();
+    // esp_err_t r = https_request();
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "http_post failed, obtain time and retrying");
         fetch_and_store_time_in_nvs(NULL);
         print_time();
-        // r = http_request();
-        r = https_request();
+        r = http_request();
+        // r = https_request();
     }
     #if MILLIS_DELAY_BEFORE_SLEEP > 0
     vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
