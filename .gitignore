@@ -1,4 +1,5 @@
 /sdkconfig
+/sdkconfig.old
 /.cache
 /build
 /.vscode
