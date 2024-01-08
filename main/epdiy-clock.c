@@ -226,6 +226,7 @@ int draw_png(uint8_t* source_buf, size_t size) {
 }
 
 esp_err_t display_source_buf() {
+    epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
     int r = draw_jpeg(source_buf);
     if (r == ESP_FAIL) {
@@ -237,7 +238,7 @@ esp_err_t display_source_buf() {
         return ESP_FAIL;
     }
     time_download = (esp_timer_get_time() - time_download_start) / 1000;
-    ESP_LOGI("www-dw", "%" PRIu32 " ms - download", time_download);
+    ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
     // Refresh display
     epd_hl_update_screen(&hl, MODE_GC16, 25);
 
@@ -565,7 +566,6 @@ void app_main(void) {
     print_time();
 
     epd_poweron();
-    epd_fullclear(&hl, TEMPERATURE);
 
     // handle http request
     esp_err_t r = http_request();
