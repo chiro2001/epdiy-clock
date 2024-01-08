@@ -31,10 +31,15 @@
 #include "esp_sntp.h"
 #include "time_sync.h"
 #include "esp_tls.h"
+#include "esp_err.h"
 // epdiy
 #include "epdiy.h"
 #include "epd_highlevel.h"
 #include "epd_display.h"
+// storage
+#include "esp_vfs.h"
+// #include "esp_vfs_fat.h"
+#include "esp_spiffs.h"
 
 // image decoders
 #include "jpeg_decoder.h"

@@ -7,9 +7,14 @@ idf_component_register(
     epdiy
     esp_jpeg
     esp_rom
-    nvs_flash esp-tls esp_http_client
+    nvs_flash 
+    esp-tls 
+    esp_http_client
     esp_app_format
     esp_wifi
+    # fatfs
+    spiffs
+    vfs
     pngle
   EMBED_TXTFILES ${project_dir}/ssl_cert/server_cert.pem
 )

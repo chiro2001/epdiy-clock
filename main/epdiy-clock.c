@@ -1,5 +1,8 @@
 #include "common.h"
 #include "esp_err.h"
+#include "settings.h"
+#include <assert.h>
+#include <unistd.h>
 
 /// global variables
 
@@ -14,6 +17,10 @@ static uint8_t tjpgd_work[3096];  // tjpgd 3096 is the minimum size
 uint8_t* fb;                      // EPD 2bpp buffer
 static uint32_t feed_buffer_pos = 0;
 
+// opened files
+FILE *fp_downloading = NULL;
+FILE *fp_reading = NULL;
+
 // Load the EMBED_TXTFILES. Then doing (char*) server_cert_pem_start you get the SSL certificate
 // Reference:
 // https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html#embedding-binary-data
@@ -26,6 +33,9 @@ JRESULT rc;
 // PNG decoder
 pngle_t *pngle = NULL;
 uint8_t render_pixel_skip = 0xff;
+
+// Handle of the wear levelling library instance
+// static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 // time
 int64_t time_download_start;
@@ -63,11 +73,12 @@ static uint32_t tjd_output(
     uint32_t w = rect->right - rect->left + 1;
     uint32_t h = rect->bottom - rect->top + 1;
     uint32_t image_width = jd->width;
+    uint32_t image_height = jd->height;
     uint8_t* bitmap_ptr = (uint8_t*)bitmap;
 
     // Write to display
-    int padding_x = (epd_rotated_display_width() - jd->width) / 2;
-    int padding_y = (epd_rotated_display_height() - jd->height) / 2;
+    int padding_x = (epd_rotated_display_width() - image_width) / 2;
+    int padding_y = (epd_rotated_display_height() - image_height) / 2;
     
     for (uint32_t i = 0; i < w * h; i++) {
         uint8_t r = *(bitmap_ptr++);
@@ -83,7 +94,7 @@ static uint32_t tjd_output(
             continue;
         }
         int yy = rect->top + i / w;
-        if (yy < 0 || yy >= jd->height) {
+        if (yy < 0 || yy >= image_height) {
             continue;
         }
 
@@ -137,6 +148,58 @@ int draw_jpeg(uint8_t* source_buf) {
     ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
 
     return 0;
+}
+
+static uint32_t feed_buffer_file(
+    JDEC* jd,
+    uint8_t* buff,  // Pointer to the read buffer (NULL:skip)
+    uint32_t nd
+) {
+    assert(fp_reading != NULL);
+    uint32_t count = 0;
+    if (feof(fp_reading)) {
+        // printf("EOF\n");
+        return count;
+    } else if (!buff) {
+        // just move the file pointer
+        // printf("skip %d bytes\n", nd);
+        fseek(fp_reading, nd, SEEK_CUR);
+        count = nd;
+    } else {
+        // normal read
+        count = fread(buff, 1, nd, fp_reading);
+        // printf("read %d bytes, got %d\n", nd, count);
+    }
+    return count;
+}
+
+esp_err_t draw_jpeg_file(const char *filename) {
+    fp_reading = fopen(filename, "rb");
+    if (!fp_reading) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    rc = jd_prepare(&jd, feed_buffer_file, tjpgd_work, sizeof(tjpgd_work), NULL);
+    if (rc != JDR_OK) {
+        ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
+        return ESP_FAIL;
+    }
+
+    uint32_t decode_start = esp_timer_get_time();
+
+    // Last parameter scales        v 1 will reduce the image
+    rc = jd_decomp(&jd, tjd_output, 0);
+    if (rc != JDR_OK) {
+        ESP_LOGE(TAG, "JPG jd_decomp error: %s", jd_errors[rc]);
+        return ESP_FAIL;
+    }
+
+    time_decomp = (esp_timer_get_time() - decode_start) / 1000;
+
+    ESP_LOGI("JPG", "width: %d height: %d", jd.width, jd.height);
+    ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
+
+    return ESP_OK;
 }
 
 void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t rgba[4]) {
@@ -226,6 +289,10 @@ int draw_png(uint8_t* source_buf, size_t size) {
 }
 
 esp_err_t display_source_buf() {
+    if (!source_buf) {
+        ESP_LOGW(TAG, "source_buf is NULL");
+        return ESP_FAIL;
+    }
     epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
     int r = draw_jpeg(source_buf);
@@ -249,7 +316,7 @@ esp_err_t display_source_buf() {
     return ESP_OK;
 }
 
-// Handles Htpp events and is in charge of buffering source_buf (jpg compressed image)
+// Download and write data to `filename_temp_image'
 esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     static uint32_t data_recv = 0;
     static uint32_t on_data_cnt = 0;
@@ -259,30 +326,39 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             break;
         case HTTP_EVENT_ON_CONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
+            if (!fp_downloading) {
+                fp_downloading = fopen(filename_temp_image, "wb");
+                if (!fp_downloading) {
+                    ESP_LOGE(TAG, "Failed to open file for writing");
+                    return ESP_FAIL;
+                }
+            }
             break;
         case HTTP_EVENT_HEADER_SENT:
             ESP_LOGI(TAG, "HTTP_EVENT_HEADER_SENT");
             break;
         case HTTP_EVENT_ON_HEADER:
-#if DEBUG_VERBOSE
+// #if DEBUG_VERBOSE
             ESP_LOGI(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
-#endif
+// #endif
             if (strncmp(evt->header_key, "Content-Length", 14) == 0) {
                 // Should be big enough to hold the JPEG file size
                 data_len_total = atol(evt->header_value);
                 if (data_len_total) {
-                    ESP_LOGI("epdiy", "Allocating content buffer of length %X (%dKiB)", data_len_total, data_len_total / 1024);
-                    source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_SPIRAM);
-                    // source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_INTERNAL);
-                    if (source_buf == NULL) {
-                        ESP_LOGE("main", "Initial alloc source_buf failed!");
-                    }
-                    printf("Free heap after buffers allocation: %X\n", xPortGetFreeHeapSize());
+                    // ESP_LOGI("epdiy", "Allocating content buffer of length %X (%dKiB)", data_len_total, data_len_total / 1024);
+                    // source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_SPIRAM);
+                    // // source_buf = (uint8_t*)heap_caps_malloc(data_len_total, MALLOC_CAP_INTERNAL);
+                    // if (source_buf == NULL) {
+                    //     ESP_LOGE("main", "Initial alloc source_buf failed!");
+                    // }
+                    // printf("Free heap after buffers allocation: %X\n", xPortGetFreeHeapSize());
                 } else {
                     ESP_LOGW("main", "Content-Length header is empty!");
                 }
             }
-
+            break;
+        case HTTP_EVENT_REDIRECT:
+            ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
             break;
         case HTTP_EVENT_ON_DATA:
             ++on_data_cnt;
@@ -292,12 +368,18 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             }
 #endif
             // should be allocated after the Content-Length header was received.
-            assert(source_buf != NULL);
+            // assert(source_buf != NULL);
 
             if (on_data_cnt == 1)
                 time_download_start = esp_timer_get_time();
             // Append received data into source_buf
-            memcpy(&source_buf[data_recv], evt->data, evt->data_len);
+            // memcpy(&source_buf[data_recv], evt->data, evt->data_len);
+            // Write received data into file
+            if (!fp_downloading) {
+                ESP_LOGE(TAG, "fp_downloading is NULL");
+            } else {
+                fwrite(evt->data, 1, evt->data_len, fp_downloading);
+            }
             data_recv += evt->data_len;
 
             // Optional hexa dump
@@ -311,13 +393,18 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                 esp_err_t r = display_source_buf();
                 if (r != ESP_OK) {
                     ESP_LOGE(TAG, "display_source_buf failed");
-                    return r;
+                    // return r;
                 }
             }
             break;
 
         case HTTP_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED\n");
+            // close file
+            if (fp_downloading) {
+                fclose(fp_downloading);
+                fp_downloading = NULL;
+            }
             break;
 
         default:
@@ -528,6 +615,86 @@ void print_time() {
     ESP_LOGI(TAG, "The current date/time is: %s", asctime(&timeinfo));
 }
 
+void finish_system(void) {
+    epd_poweroff();
+    epd_deinit();
+    esp_vfs_spiffs_unregister(storage_partition_label);
+    deepsleep();
+}
+
+esp_err_t download_image() {
+    // handle http request
+    esp_err_t r = http_request();
+    // esp_err_t r = https_request();
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "http_post failed, obtain time and retrying");
+        fetch_and_store_time_in_nvs(NULL);
+        print_time();
+        r = http_request();
+        // r = https_request();
+    }
+// #if MILLIS_DELAY_BEFORE_SLEEP > 0
+//     vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
+// #endif
+//     finish_system();
+    return r;
+}
+
+// esp_err_t init_flash_storage_fatfs(const char *partition_label) {
+//     ESP_LOGI(TAG, "Mounting FAT filesystem");
+//     const esp_vfs_fat_mount_config_t mount_config = {
+//             .max_files = 4,
+//             .format_if_mount_failed = true,
+//             .allocation_unit_size = CONFIG_WL_SECTOR_SIZE
+//     };
+//     esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(storage_base_path, partition_label, &mount_config, &s_wl_handle);
+//     if (err != ESP_OK) {
+//         ESP_LOGE(TAG, "Failed to mount FATFS (%s)", esp_err_to_name(err));
+//         return err;
+//     }
+//     return ESP_OK;
+// }
+
+esp_err_t init_flash_storage() {
+    ESP_LOGI(TAG, "Initializing SPIFFS");
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = storage_base_path,
+        .partition_label = storage_partition_label,
+        .max_files = 12,
+        .format_if_mount_failed = true
+    };
+    esp_err_t err = esp_vfs_spiffs_register(&conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to mount SPIFFS (%s)", esp_err_to_name(err));
+        return err;
+    }
+    return ESP_OK;
+}
+
+esp_err_t do_display(const char *filename) {
+    epd_fullclear(&hl, TEMPERATURE);
+    ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
+    esp_err_t r = draw_jpeg_file(filename);
+    if (r == ESP_FAIL) {
+        // ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        // r = draw_png(source_buf, data_len_total);
+    }
+    if (r == ESP_FAIL) {
+        ESP_LOGE(TAG, "draw as png failed");
+        return ESP_FAIL;
+    }
+    time_download = (esp_timer_get_time() - time_download_start) / 1000;
+    ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
+    // Refresh display
+    epd_hl_update_screen(&hl, MODE_GC16, 25);
+
+    ESP_LOGI(
+        "total", "%" PRIu32 " ms - total time spent\n",
+        time_download + time_decomp + time_render
+    );
+    return ESP_OK;
+}
+
 void app_main(void) {
   ESP_LOGI(TAG, "START!");
   enum EpdInitOptions init_options = EPD_LUT_64K;
@@ -551,36 +718,69 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    // Initializaze Flash Storage
+    ESP_ERROR_CHECK(init_flash_storage());
+
     // WiFi log level set only to Error otherwise outputs too much
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
     // Initialization: WiFi + clean screen while downloading image
     wifi_init_sta();
 
-    // auto request and save time in NVS
-    if (esp_reset_reason() == ESP_RST_POWERON) {
-        fetch_and_store_time_in_nvs(NULL);
-    }
-    update_time_from_nvs();
-    // print time now
     print_time();
+    // // auto request and save time in NVS
+    // if (esp_reset_reason() == ESP_RST_POWERON) {
+    //     fetch_and_store_time_in_nvs(NULL);
+    // }
+    // update_time_from_nvs();
+    // // print time now
+    // print_time();
 
     epd_poweron();
 
-    // handle http request
-    esp_err_t r = http_request();
-    // esp_err_t r = https_request();
-    if (r != ESP_OK) {
-        ESP_LOGE(TAG, "http_post failed, obtain time and retrying");
-        fetch_and_store_time_in_nvs(NULL);
-        print_time();
-        r = http_request();
-        // r = https_request();
+    // list files
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(storage_base_path);
+    if (d) {
+        ESP_LOGI(TAG, "Files in %s:", storage_base_path);
+        while ((dir = readdir(d)) != NULL) {
+            ESP_LOGI(TAG, "%s", dir->d_name);
+        }
+        closedir(d);
     }
-    #if MILLIS_DELAY_BEFORE_SLEEP > 0
-    vTaskDelay(MILLIS_DELAY_BEFORE_SLEEP / portTICK_PERIOD_MS);
-#endif
-    printf("Go to sleep %d minutes\n", DEEPSLEEP_MINUTES_AFTER_RENDER);
-    epd_poweroff();
-    deepsleep();
+
+    // struct stat st;
+    // // display current image, or fallback
+    // if (stat(filename_current_image, &st) == 0) {
+    //     // file exists
+    //     do_display(filename_current_image);
+    // } else {
+    //     // file doesn't exist
+    //     if (stat(filename_fallback_image, &st) == 0) {
+    //         // file exists
+    //         do_display(filename_fallback_image);
+    //     } else {
+    //         // file doesn't exist
+    //         ESP_LOGE(TAG, "No image to display");
+    //         // finish_system();
+    //         // return;
+    //     }
+    // }
+
+    ret = download_image();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "download_image failed");
+    } else {
+        ESP_LOGI(TAG, "download_image success");
+        // delete fallback image
+        unlink(filename_fallback_image);
+        // move current image to fallback image
+        rename(filename_current_image, filename_fallback_image);
+        // move temp file to final file
+        rename(filename_temp_image, filename_current_image);
+    }
+    // then display current image, or fallback
+    // xTaskCreate(do_display, "do_display", 8192, NULL, 5, NULL);
+    do_display(filename_current_image);
 }

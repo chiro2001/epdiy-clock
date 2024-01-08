@@ -24,9 +24,12 @@
 
 #define IMG_URL "https://img.moehu.org/pic.php?id=img1"
 #define IMG_HOST "img.moehu.org"
+
+// #define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
+// #define IMG_HOST "192.168.31.141"
+
 // #define IMG_URL "https://www.howsmyssl.com/a/check"
 // #define IMG_HOST "www.howsmyssl.com"
-
 
 /// image decode
 #define JPG_DITHERING 0
@@ -41,5 +44,12 @@
 #define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3, \
                           ESP_SNTP_SERVER_LIST("cn.pool.ntp.org", "time.windows.com", "ntp.chiro.work") )
 #define HTTP_RECEIVE_TIMEOUT_MS (30 * 1000)
+
+/// storage
+static const char *storage_base_path = "/spiflash";
+static const char *storage_partition_label = "storage";
+static const char *filename_current_image = "/spiflash/current";
+static const char *filename_fallback_image = "/spiflash/fallback";
+static const char *filename_temp_image = "/spiflash/temp";
 
 #endif
