@@ -29,6 +29,7 @@
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
+#include "time_sync.h"
 // epdiy
 #include "epdiy.h"
 #include "epd_highlevel.h"
@@ -45,5 +46,10 @@
 
 void wifi_init_sta(void);
 void deepsleep();
+
+// void initialize_sntp(void);
+// esp_err_t obtain_time(void);
+// esp_err_t fetch_and_store_time_in_nvs(void *args);
+// esp_err_t update_time_from_nvs(void);
 
 #endif

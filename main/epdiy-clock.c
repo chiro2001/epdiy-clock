@@ -1,4 +1,5 @@
 #include "common.h"
+#include "esp_log.h"
 
 /// global variables
 
@@ -42,57 +43,6 @@ void generate_gamme(double gamma_value) {
   for (int gray_value = 0; gray_value < 256; gray_value++)
     gamme_curve[gray_value] = round(255 * pow(gray_value / 255.0, gammaCorrection));
 }
-
-#if VALIDATE_SSL_CERTIFICATE
-/* Time aware for ESP32: Important to check SSL certs validity */
-void time_sync_notification_cb(struct timeval* tv) {
-  ESP_LOGI(TAG, "Notification of a time synchronization event");
-}
-
-static void print_sntp_servers(void) {
-  ESP_LOGI(TAG, "List of configured NTP servers:");
-
-  for (uint8_t i = 0; i < SNTP_MAX_SERVERS; ++i) {
-    if (esp_sntp_getservername(i)) {
-      ESP_LOGI(TAG, "server %d: %s", i, esp_sntp_getservername(i));
-    } else {
-      // we have either IPv4 or IPv6 address, let's print it
-      char buff[INET6_ADDRSTRLEN];
-      ip_addr_t const* ip = esp_sntp_getserver(i);
-      if (ipaddr_ntoa_r(ip, buff, INET6_ADDRSTRLEN) != NULL)
-          ESP_LOGI(TAG, "server %d: %s", i, buff);
-    }
-  }
-}
-
-static void initialize_sntp(void) {
-    ESP_LOGI(TAG, "Initializing SNTP");
-    // esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);
-    esp_sntp_config_t config = NTP_SERVER_CONFIG;
-    config.sync_cb = time_sync_notification_cb;
-    esp_netif_sntp_init(&config);
-    print_sntp_servers();
-}
-
-static void obtain_time(void) {
-    initialize_sntp();
-
-    // wait for time to be set
-    time_t now = 0;
-    struct tm timeinfo = {0};
-    int retry = 0;
-    const int retry_count = 15;
-    while (esp_netif_sntp_sync_wait(2000 / portTICK_PERIOD_MS) == ESP_ERR_TIMEOUT && ++retry < retry_count) {
-        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
-    }
-    if (retry == retry_count) {
-        ESP_LOGE(TAG, "Failed to obtain time over SNTP");
-    }
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    ESP_LOGI(TAG, "Current time: %s", asctime(&timeinfo));
-}
-#endif
 
 /* User defined call-back function to output decoded RGB bitmap in decoded_image buffer */
 static uint32_t tjd_output(
@@ -315,6 +265,15 @@ static void http_post(void) {
     deepsleep();
 }
 
+void print_time() {
+    // get from time()
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    ESP_LOGI(TAG, "The current date/time is: %s", asctime(&timeinfo));
+}
+
 void app_main(void) {
   ESP_LOGI(TAG, "START!");
   enum EpdInitOptions init_options = EPD_LUT_64K;
@@ -343,9 +302,12 @@ void app_main(void) {
 
     // Initialization: WiFi + clean screen while downloading image
     wifi_init_sta();
-// #if VALIDATE_SSL_CERTIFICATE
-    obtain_time();
-// #endif
+
+    // auto request and save time in NVS
+    update_time_from_nvs();
+    // print time now
+    print_time();
+
     epd_poweron();
     epd_fullclear(&hl, TEMPERATURE);
 
