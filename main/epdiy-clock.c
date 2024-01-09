@@ -320,19 +320,13 @@ esp_err_t display_source_buf() {
 esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     static uint32_t data_recv = 0;
     static uint32_t on_data_cnt = 0;
+    static bool download_err = false;
     switch (evt->event_id) {
         case HTTP_EVENT_ERROR:
             ESP_LOGE(TAG, "HTTP_EVENT_ERROR");
             break;
         case HTTP_EVENT_ON_CONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
-            if (!fp_downloading) {
-                fp_downloading = fopen(filename_temp_image, "wb");
-                if (!fp_downloading) {
-                    ESP_LOGE(TAG, "Failed to open file for writing");
-                    return ESP_FAIL;
-                }
-            }
             break;
         case HTTP_EVENT_HEADER_SENT:
             ESP_LOGI(TAG, "HTTP_EVENT_HEADER_SENT");
@@ -370,15 +364,27 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             // should be allocated after the Content-Length header was received.
             // assert(source_buf != NULL);
 
-            if (on_data_cnt == 1)
+            if (on_data_cnt == 1) {
                 time_download_start = esp_timer_get_time();
+                if (!fp_downloading) {
+                    fp_downloading = fopen(filename_temp_image, "wb");
+                    if (!fp_downloading) {
+                        ESP_LOGE(TAG, "Failed to open file for writing");
+                        download_err = true;
+                    }
+                }    
+            }
             // Append received data into source_buf
             // memcpy(&source_buf[data_recv], evt->data, evt->data_len);
             // Write received data into file
             if (!fp_downloading) {
                 ESP_LOGE(TAG, "fp_downloading is NULL");
             } else {
-                fwrite(evt->data, 1, evt->data_len, fp_downloading);
+                unsigned long written_bytes = fwrite(evt->data, 1, evt->data_len, fp_downloading);
+                if (written_bytes != evt->data_len) {
+                    ESP_LOGE(TAG, "fwrite failed! expected %d, got %d", evt->data_len, written_bytes);
+                    download_err = true;
+                }
             }
             data_recv += evt->data_len;
 
@@ -404,6 +410,10 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             if (fp_downloading) {
                 fclose(fp_downloading);
                 fp_downloading = NULL;
+                if (download_err) {
+                    ESP_LOGE(TAG, "Download failed, deleting file");
+                    unlink(filename_temp_image);
+                }
             }
             break;
 
