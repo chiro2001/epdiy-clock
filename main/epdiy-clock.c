@@ -1,8 +1,4 @@
 #include "common.h"
-#include "esp_err.h"
-#include "settings.h"
-#include <assert.h>
-#include <unistd.h>
 
 /// global variables
 
@@ -10,6 +6,8 @@ EpdiyHighlevelState hl;
 uint32_t data_len_total = 0;
 // #define TAG "eclock"
 const static char *TAG = "eclock";
+char downloading_url[512] = IMG_URL;
+const EpdFont* font = &TimeTraveler;
 
 // buffers
 uint8_t* source_buf = NULL;       // downloaded image
@@ -350,6 +348,11 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     ESP_LOGW("main", "Content-Length header is empty!");
                 }
             }
+            // get redirect url
+            if (strncmp(evt->header_key, "Location", 8) == 0) {
+                strncpy(downloading_url, evt->header_value, sizeof(downloading_url));
+                ESP_LOGI(TAG, "Redirecting to %s", downloading_url);
+            }
             break;
         case HTTP_EVENT_REDIRECT:
             ESP_LOGI(TAG, "HTTP_EVENT_REDIRECT");
@@ -605,7 +608,7 @@ static esp_err_t http_request(void) {
         // esp_http_client_get_content_length returns a uint64_t in esp-idf v5, so it needs a %lld
         // format specifier
         ESP_LOGI(
-            TAG, "\nIMAGE URL: %s\n\nHTTP GET Status = %d, content_length = %d\n", IMG_URL,
+            TAG, "\nIMAGE URL: %s\n\nHTTP GET Status = %d, content_length = %d\n", downloading_url,
             esp_http_client_get_status_code(client), (int)esp_http_client_get_content_length(client)
         );
     } else {
@@ -688,7 +691,7 @@ esp_err_t init_flash_storage() {
 
 esp_err_t do_display(const char *filename) {
     epd_fullclear(&hl, TEMPERATURE);
-    ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
+    ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, downloading_url);
     esp_err_t r = draw_jpeg_file(filename);
     if (r == ESP_FAIL) {
         // ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
@@ -708,6 +711,23 @@ esp_err_t do_display(const char *filename) {
         time_download + time_decomp + time_render
     );
     return ESP_OK;
+}
+
+void draw_time() {
+    EpdFontProperties font_props = epd_font_properties_default();
+    font_props.flags = EPD_DRAW_ALIGN_CENTER;
+    font_props.fg_color = 0xf;
+    char time_now[64];
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    strftime(time_now, sizeof(time_now), "%H:%M", &timeinfo);
+    int cursor_x = epd_rotated_display_width() / 2;
+    int cursor_y = epd_rotated_display_height() / 2 - 250;
+    epd_write_string(font, time_now, &cursor_x, &cursor_y, fb, &font_props);
+    // epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
+    epd_hl_update_screen(&hl, MODE_GC16, TEMPERATURE);
 }
 
 void app_main(void) {
@@ -783,20 +803,21 @@ void app_main(void) {
     //     }
     // }
 
-    ret = download_image();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "download_image failed");
-    } else {
-        ESP_LOGI(TAG, "download_image success");
-        // delete fallback image
-        unlink(filename_fallback_image);
-        // move current image to fallback image
-        rename(filename_current_image, filename_fallback_image);
-        // move temp file to final file
-        rename(filename_temp_image, filename_current_image);
-    }
+    // ret = download_image();
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "download_image failed");
+    // } else {
+    //     ESP_LOGI(TAG, "download_image success");
+    //     // delete fallback image
+    //     unlink(filename_fallback_image);
+    //     // move current image to fallback image
+    //     rename(filename_current_image, filename_fallback_image);
+    //     // move temp file to final file
+    //     rename(filename_temp_image, filename_current_image);
+    // }
+
     // then display current image, or fallback
-    // xTaskCreate(do_display, "do_display", 8192, NULL, 5, NULL);
     do_display(filename_current_image);
+    draw_time();
     finish_system();
 }

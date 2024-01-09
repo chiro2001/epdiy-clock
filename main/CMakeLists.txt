@@ -1,8 +1,17 @@
-file(GLOB app_sources *.c)
+# file(GLOB app_sources ${project_dir}/*.c)
+# message(STATUS "app_sources: ${app_sources}")
+set(app_sources
+  "epdiy-clock.c"
+  "sleep.c"
+  "time_sync.c"
+  "wifi.c"
+  "font/time_traveler.c"
+)
+# file(GLOB_RECURSE app_resources res/*)
 
 idf_component_register(
   SRCS ${app_sources}
-  INCLUDE_DIRS "include"
+  INCLUDE_DIRS "include" "."
   REQUIRES 
     epdiy
     esp_jpeg
@@ -16,7 +25,7 @@ idf_component_register(
     spiffs
     vfs
     pngle
-  EMBED_TXTFILES ${project_dir}/ssl_cert/server_cert.pem
+  EMBED_TXTFILES ${project_dir}/res/ssl_cert/server_cert.pem
 )
 
 # make compliler happy

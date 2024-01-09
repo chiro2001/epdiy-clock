@@ -40,6 +40,8 @@
 #include "esp_vfs.h"
 // #include "esp_vfs_fat.h"
 #include "esp_spiffs.h"
+// font
+#include "font/time_traveler.h"
 
 // image decoders
 #include "jpeg_decoder.h"
