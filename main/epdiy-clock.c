@@ -1,4 +1,8 @@
 #include "common.h"
+#include "esp_heap_caps.h"
+#include "miniz.h"
+#include "settings.h"
+#include <stdio.h>
 
 /// global variables
 
@@ -284,6 +288,36 @@ int draw_png(uint8_t* source_buf, size_t size) {
     ESP_LOGI("PNG", "width: %d height: %d", pngle_get_width(pngle), pngle_get_height(pngle));
     ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
     return r;
+}
+
+esp_err_t draw_png_file(const char *filename) {
+    fp_reading = fopen(filename, "rb");
+    if (!fp_reading) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    int r = 0;
+    uint32_t decode_start = esp_timer_get_time();
+    if (pngle != NULL) {
+        pngle_destroy(pngle);
+        pngle = NULL;
+    }
+    pngle = pngle_new();
+    pngle_set_draw_callback(pngle, on_draw_png);
+
+    uint8_t buf[1024];
+    while (!feof(fp_reading)) {
+        size_t bytes_read = fread(buf, 1, sizeof(buf), fp_reading);
+        r = pngle_feed(pngle, buf, bytes_read);
+        if (r < 0) {
+            ESP_LOGE(TAG, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
+            return ESP_FAIL;
+        }
+    }
+    time_decomp = (esp_timer_get_time() - decode_start) / 1000;
+    ESP_LOGI("PNG", "width: %d height: %d", pngle_get_width(pngle), pngle_get_height(pngle));
+    ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
+    return ESP_OK;
 }
 
 esp_err_t display_source_buf() {
@@ -628,13 +662,6 @@ void print_time() {
     ESP_LOGI(TAG, "The current date/time is: %s", asctime(&timeinfo));
 }
 
-void finish_system(void) {
-    epd_poweroff();
-    epd_deinit();
-    esp_vfs_spiffs_unregister(storage_partition_label);
-    deepsleep();
-}
-
 esp_err_t download_image() {
     // handle http request
     // esp_err_t r = http_request();
@@ -694,8 +721,8 @@ esp_err_t do_display(const char *filename) {
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, downloading_url);
     esp_err_t r = draw_jpeg_file(filename);
     if (r == ESP_FAIL) {
-        // ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
-        // r = draw_png(source_buf, data_len_total);
+        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        r = draw_png_file(filename);
     }
     if (r == ESP_FAIL) {
         ESP_LOGE(TAG, "draw as png failed");
@@ -713,10 +740,171 @@ esp_err_t do_display(const char *filename) {
     return ESP_OK;
 }
 
+esp_err_t fb_save_raw() {
+    // save framebuffer to file
+    FILE *fp = fopen(filename_fb, "wb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    int fb_size = epd_width() / 2 * epd_height();
+    ESP_LOGI(TAG, "Writing %d bytes (%d KiB) to %s", fb_size * 4, fb_size * 4 / 1024, filename_fb);
+    unsigned int wr;
+    wr = fwrite(hl.front_fb, 1, fb_size, fp);
+    if (wr != fb_size) {
+        ESP_LOGE(TAG, "fwrite front fb failed! expected %d, got %d", fb_size, wr);
+    }
+    wr = fwrite(hl.back_fb, 1, fb_size, fp);
+    if (wr != fb_size) {
+        ESP_LOGE(TAG, "fwrite back fb failed! expected %d, got %d", fb_size, wr);
+    }
+    wr = fwrite(hl.difference_fb, 1, fb_size * 2, fp);
+    if (wr != fb_size * 2) {
+        ESP_LOGE(TAG, "fwrite difference fb failed! expected %d, got %d", fb_size * 2, wr);
+    }
+    fclose(fp);
+    return ESP_OK;
+}
+
+int fb_save_compressed_stream(const void *pBuf, int len, void *pUser) {
+    unsigned int written = fwrite(pBuf, 1, len, (FILE*)pUser);
+    if (written != len) {
+        ESP_LOGE(TAG, "fwrite failed! expected %d, got %d", len, written);
+    }
+    return written == len;
+}
+
+esp_err_t fb_save_compressed() {
+    // save framebuffer to file
+    FILE *fp;
+    int fb_size = epd_width() / 2 * epd_height();
+    ESP_LOGI(TAG, "Writing %d bytes (%d KiB)", fb_size * 4, fb_size * 4 / 1024);
+    printf("fb_save_compressed, tdefl_init@%p, tdefl_compress_buffer@%p", tdefl_init, tdefl_compress_buffer);
+    fflush(stdout);
+    tdefl_compressor comp;
+    size_t wr = 0;
+    fp = fopen(filename_fb_compressed_front, "wb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
+    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.front_fb, fb_size, TDEFL_FINISH)) {
+        ESP_LOGE(TAG, "tdefl_compress_buffer front failed!");
+    }
+    wr += ftell(fp);
+    fclose(fp);
+    
+    fp = fopen(filename_fb_compressed_back, "wb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
+    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.back_fb, fb_size, TDEFL_FINISH)) {
+        ESP_LOGE(TAG, "tdefl_compress_buffer back failed!");
+    }
+    wr += ftell(fp);
+    fclose(fp);
+
+    fp = fopen(filename_fb_compressed_diff, "wb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
+    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.difference_fb, fb_size * 2, TDEFL_FINISH)) {
+        ESP_LOGE(TAG, "tdefl_compress_buffer difference failed!");
+    }
+    wr += ftell(fp);
+    fclose(fp);
+
+    ESP_LOGI(TAG, "Wrote compressed %d bytes (%d KiB)", wr, wr / 1024);
+    return ESP_OK;
+}
+
+esp_err_t fb_load() {
+    // load framebuffer from file
+    FILE *fp = fopen(filename_fb, "rb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    int fb_size = epd_width() / 2 * epd_height();
+    ESP_LOGI(TAG, "Reading %d bytes (%d KiB) from %s", fb_size * 4, fb_size * 4 / 1024, filename_fb);
+    unsigned int rd;
+    rd = fread(hl.front_fb, 1, fb_size, fp);
+    if (rd != fb_size) {
+        ESP_LOGE(TAG, "fread front fb failed! expected %d, got %d", fb_size, rd);
+    }
+    rd = fread(hl.back_fb, 1, fb_size, fp);
+    if (rd != fb_size) {
+        ESP_LOGE(TAG, "fread back fb failed! expected %d, got %d", fb_size, rd);
+    }
+    rd = fread(hl.difference_fb, 1, fb_size * 2, fp);
+    if (rd != fb_size * 2) {
+        ESP_LOGE(TAG, "fread difference fb failed! expected %d, got %d", fb_size * 2, rd);
+    }
+    return ESP_OK;
+}
+
+esp_err_t fb_load_compressed() {
+    // load framebuffer from file
+    FILE *fp;
+    int fb_size = epd_width() / 2 * epd_height();
+    unsigned int rd;
+    uint8_t *buf = (uint8_t*)heap_caps_malloc(fb_size * 2, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        ESP_LOGE(TAG, "Failed to allocate memory for buf");
+        return ESP_FAIL;
+    }
+    
+    fp = fopen(filename_fb_compressed_front, "rb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    if (0 == (rd = fread(buf, 1, fb_size, fp))) {
+        ESP_LOGE(TAG, "fread front fb failed!");
+    }
+    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.front_fb, fb_size, buf, rd, 0)) {
+        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem front failed!");
+    }
+    fclose(fp);
+
+    fp = fopen(filename_fb_compressed_back, "rb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    if (0 == (rd = fread(buf, 1, fb_size, fp))) {
+        ESP_LOGE(TAG, "fread back fb failed!");
+    }
+    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.back_fb, fb_size, buf, rd, 0)) {
+        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem back failed!");
+    }
+    fclose(fp);
+
+    fp = fopen(filename_fb_compressed_diff, "rb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    if (0 == (rd = fread(buf, 1, fb_size * 2, fp))) {
+        ESP_LOGE(TAG, "fread difference fb failed!");
+    }
+    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.difference_fb, fb_size * 2, buf, rd, 0)) {
+        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem difference failed!");
+    }
+    fclose(fp);
+    heap_caps_free(buf);
+    return ESP_OK;
+}
+
 void draw_time() {
     EpdFontProperties font_props = epd_font_properties_default();
     font_props.flags = EPD_DRAW_ALIGN_CENTER;
-    font_props.fg_color = 0xf;
+    // font_props.fg_color = 0xf;
     char time_now[64];
     time_t now;
     struct tm timeinfo;
@@ -726,8 +914,16 @@ void draw_time() {
     int cursor_x = epd_rotated_display_width() / 2;
     int cursor_y = epd_rotated_display_height() / 2 - 250;
     epd_write_string(font, time_now, &cursor_x, &cursor_y, fb, &font_props);
-    // epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
-    epd_hl_update_screen(&hl, MODE_GC16, TEMPERATURE);
+    epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
+    // epd_hl_update_screen(&hl, MODE_GC16, TEMPERATURE);
+}
+
+void finish_system(void) {
+    epd_poweroff();
+    // fb_save_compressed();
+    epd_deinit();
+    esp_vfs_spiffs_unregister(storage_partition_label);
+    deepsleep();
 }
 
 void app_main(void) {
@@ -771,8 +967,6 @@ void app_main(void) {
     // print time now
     print_time();
 
-    epd_poweron();
-
     // list files
     DIR *d;
     struct dirent *dir;
@@ -784,6 +978,8 @@ void app_main(void) {
         }
         closedir(d);
     }
+
+    // fb_load_compressed();
 
     // struct stat st;
     // // display current image, or fallback
@@ -816,8 +1012,12 @@ void app_main(void) {
     //     rename(filename_temp_image, filename_current_image);
     // }
 
+    epd_poweron();
+
     // then display current image, or fallback
     do_display(filename_current_image);
     draw_time();
+    // printf("calling fb_save_compressed();\n");
+    // fb_save_compressed();
     finish_system();
 }

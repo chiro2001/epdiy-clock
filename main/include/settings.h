@@ -32,6 +32,9 @@
 // #define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
 // #define IMG_HOST "192.168.31.141"
 
+// #define IMG_URL "http://192.168.31.141:8080/diannnnnna.png"
+// #define IMG_HOST "192.168.31.141"
+
 // #define IMG_URL "https://www.howsmyssl.com/a/check"
 // #define IMG_HOST "www.howsmyssl.com"
 
@@ -57,5 +60,9 @@ static const char *storage_partition_label = "storage";
 static const char *filename_current_image = "/spiflash/current";
 static const char *filename_fallback_image = "/spiflash/fallback";
 static const char *filename_temp_image = "/spiflash/temp";
+static const char *filename_fb = "/spiflash/fb.raw";
+static const char *filename_fb_compressed_front = "/spiflash/fb_front.miniz";
+static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
+static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
 
 #endif
