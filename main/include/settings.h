@@ -66,7 +66,7 @@ static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
 static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
 static const char *filename_last_time = "/spiflash/last_time.dat";
 
-// #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
-#define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
+#define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
+// #define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
 
 #endif

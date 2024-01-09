@@ -38,6 +38,7 @@ esp_err_t compress_mem_to_file(const char *filename, const uint8_t *data,
   if (ret != Z_OK) {
     goto error;
   }
+  int64_t time_start = esp_timer_get_time();
 
   /* compress until end of file */
   do {
@@ -72,8 +73,9 @@ esp_err_t compress_mem_to_file(const char *filename, const uint8_t *data,
 
   /* clean up and return */
   if (strm.total_in) {
-    ESP_LOGI(__func__, "compressed %dKiB to %dKiB, %d%%", 
-      strm.total_in / 1024, strm.total_out / 1024, strm.total_out * 100 / strm.total_in);
+    ESP_LOGI(__func__, "compressed %dKiB to %dKiB, %d%% in %lldms", 
+      strm.total_in / 1024, strm.total_out / 1024, strm.total_out * 100 / strm.total_in,
+      (esp_timer_get_time() - time_start) / 1000);
   }
   (void)deflateEnd(&strm);
   fclose(dest);
@@ -110,6 +112,7 @@ esp_err_t decompress_file_to_mem(const char *filename, uint8_t *dest,
     ret = Z_ERRNO;
     goto error;
   }
+  int64_t time_start = esp_timer_get_time();
 
   /* allocate inflate state */
   strm.zalloc = Z_NULL;
@@ -162,8 +165,9 @@ esp_err_t decompress_file_to_mem(const char *filename, uint8_t *dest,
 
   /* clean up and return */
   if (strm.total_out) {
-    ESP_LOGI(__func__, "decompressed %dKiB to %dKiB, %d%%", 
-      strm.total_in / 1024, strm.total_out / 1024, strm.total_in * 100 / strm.total_out);
+    ESP_LOGI(__func__, "decompressed %dKiB to %dKiB, %d%% in %lldms", 
+      strm.total_in / 1024, strm.total_out / 1024, strm.total_in * 100 / strm.total_out,
+      (esp_timer_get_time() - time_start) / 1000);
   }
   (void)inflateEnd(&strm);
   fclose(source);

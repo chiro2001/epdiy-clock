@@ -735,6 +735,8 @@ esp_err_t do_display(const char *filename) {
         "total", "%" PRIu32 " ms - total time spent\n",
         time_download + time_decomp + time_render
     );
+    // unlink filename_last_time
+    unlink(filename_last_time);
     return ESP_OK;
 }
 
@@ -777,6 +779,9 @@ void display_time() {
     // save to filename_last_time
     fp = fopen(filename_last_time, "w");
     if (fp) {
+        // reset pos
+        info.x = epd_rotated_display_width() / 2;
+        info.y = epd_rotated_display_height() / 2 + 150;
         info.magic = DISPLAY_TIME_T_MAGIC;
         fwrite(&info, 1, sizeof(info), fp);
         fclose(fp);
@@ -786,8 +791,8 @@ void display_time() {
 void finish_system(void) {
     epd_poweron();
     // finally update screen
-    // epd_hl_update_screen(&hl, MODE_GC16, 25);
-    epd_hl_update_screen(&hl, MODE_GL16, 25);
+    epd_hl_update_screen(&hl, MODE_GC16, 25);
+    // epd_hl_update_screen(&hl, MODE_GL16, 25);
     epd_poweroff();
     fb_save_compressed();
     epd_deinit();
@@ -850,7 +855,6 @@ void app_main(void) {
     }
 
     {
-        epd_poweron();
         if (esp_reset_reason() == ESP_RST_POWERON) {
             ESP_LOGI(TAG, "Power on reset, reload buffers");
             // epd_fullclear(&hl, TEMPERATURE);
