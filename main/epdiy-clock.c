@@ -1,5 +1,10 @@
 #include "common.h"
-#include "esp_err.h"
+
+#include "wifi.h"
+#include "fb_save_load.h"
+#include "settings.h"
+#include "time_sync.h"
+#include "compress.h"
 
 /// global variables
 
@@ -335,8 +340,6 @@ esp_err_t display_source_buf() {
     }
     time_download = (esp_timer_get_time() - time_download_start) / 1000;
     ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
-    // Refresh display
-    epd_hl_update_screen(&hl, MODE_GC16, 25);
 
     ESP_LOGI(
         "total", "%" PRIu32 " ms - total time spent\n",
@@ -727,8 +730,6 @@ esp_err_t do_display(const char *filename) {
     }
     time_download = (esp_timer_get_time() - time_download_start) / 1000;
     ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
-    // Refresh display
-    epd_hl_update_screen(&hl, MODE_GC16, 25);
 
     ESP_LOGI(
         "total", "%" PRIu32 " ms - total time spent\n",
@@ -737,123 +738,56 @@ esp_err_t do_display(const char *filename) {
     return ESP_OK;
 }
 
-esp_err_t fb_save_raw() {
-    // save framebuffer to file
-    FILE *fp = fopen(filename_fb, "wb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return ESP_FAIL;
-    }
-    int fb_size = epd_width() / 2 * epd_height();
-    ESP_LOGI(TAG, "Writing %d bytes (%d KiB) to %s", fb_size * 4, fb_size * 4 / 1024, filename_fb);
-    unsigned int wr;
-    wr = fwrite(hl.front_fb, 1, fb_size, fp);
-    if (wr != fb_size) {
-        ESP_LOGE(TAG, "fwrite front fb failed! expected %d, got %d", fb_size, wr);
-    }
-    wr = fwrite(hl.back_fb, 1, fb_size, fp);
-    if (wr != fb_size) {
-        ESP_LOGE(TAG, "fwrite back fb failed! expected %d, got %d", fb_size, wr);
-    }
-    wr = fwrite(hl.difference_fb, 1, fb_size * 2, fp);
-    if (wr != fb_size * 2) {
-        ESP_LOGE(TAG, "fwrite difference fb failed! expected %d, got %d", fb_size * 2, wr);
-    }
-    fclose(fp);
-    return ESP_OK;
-}
-
-int fb_save_compressed_stream(const void *pBuf, int len, void *pUser) {
-    unsigned int written = fwrite(pBuf, 1, len, (FILE*)pUser);
-    if (written != len) {
-        ESP_LOGE(TAG, "fwrite failed! expected %d, got %d", len, written);
-    }
-    return written == len;
-}
-
-esp_err_t fb_save_compressed() {
-    // save framebuffer to file
-    int fb_size = epd_width() / 2 * epd_height();
-    ESP_LOGI(TAG, "Writing %d bytes (%d KiB) from mem", fb_size * 4, fb_size * 4 / 1024);
-
-    esp_err_t r;
-    if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_front, hl.front_fb, fb_size, Z_BEST_SPEED))) {
-        ESP_LOGE(TAG, "compress_mem_to_file front failed!");
-        return r;
-    }
-    if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_back, hl.back_fb, fb_size, Z_BEST_SPEED))) {
-        ESP_LOGE(TAG, "compress_mem_to_file back failed!");
-        return r;
-    }
-    // if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_diff, hl.difference_fb, fb_size * 2, Z_BEST_SPEED))) {
-    //     ESP_LOGE(TAG, "compress_mem_to_file difference failed!");
-    //     return r;
-    // }
-    return ESP_OK;
-}
-
-esp_err_t fb_load() {
-    // load framebuffer from file
-    FILE *fp = fopen(filename_fb, "rb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        return ESP_FAIL;
-    }
-    int fb_size = epd_width() / 2 * epd_height();
-    ESP_LOGI(TAG, "Reading %d bytes (%d KiB) from %s", fb_size * 4, fb_size * 4 / 1024, filename_fb);
-    unsigned int rd;
-    rd = fread(hl.front_fb, 1, fb_size, fp);
-    if (rd != fb_size) {
-        ESP_LOGE(TAG, "fread front fb failed! expected %d, got %d", fb_size, rd);
-    }
-    rd = fread(hl.back_fb, 1, fb_size, fp);
-    if (rd != fb_size) {
-        ESP_LOGE(TAG, "fread back fb failed! expected %d, got %d", fb_size, rd);
-    }
-    rd = fread(hl.difference_fb, 1, fb_size * 2, fp);
-    if (rd != fb_size * 2) {
-        ESP_LOGE(TAG, "fread difference fb failed! expected %d, got %d", fb_size * 2, rd);
-    }
-    return ESP_OK;
-}
-
-esp_err_t fb_load_compressed() {
-    // load framebuffer from file
-    int fb_size = epd_width() / 2 * epd_height();
-    esp_err_t r;
-    if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_front, hl.front_fb, fb_size))) {
-        ESP_LOGE(TAG, "decompress_file_to_mem front failed!");
-        return r;
-    }
-    if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_back, hl.back_fb, fb_size))) {
-        ESP_LOGE(TAG, "decompress_file_to_mem back failed!");
-        return r;
-    }
-    // if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_diff, hl.difference_fb, fb_size * 2))) {
-    //     ESP_LOGE(TAG, "decompress_file_to_mem difference failed!");
-    //     return r;
-    // }
-    return ESP_OK;
-}
+typedef struct display_time_info_t {
+    uint32_t magic;
+    int x;
+    int y;
+    char text[24];
+} display_time_info;
+#define DISPLAY_TIME_T_MAGIC 0x55aa1234
 
 void display_time() {
     EpdFontProperties font_props = epd_font_properties_default();
-    font_props.flags = EPD_DRAW_ALIGN_CENTER;
+    font_props.flags = EPD_DRAW_ALIGN_CENTER | EPD_INV_BACKGROUND;
     // font_props.fg_color = 0xf;
-    char time_now[64];
+    display_time_info info;
+    display_time_info info_last;
+
+    info.x = epd_rotated_display_width() / 2;
+    info.y = epd_rotated_display_height() / 2 + 150;
+
+    // if file `filename_last_time' exists, re-draw it
+    FILE *fp = fopen(filename_last_time, "r");
+    if (fp) {
+        fread(&info_last, 1, sizeof(info_last), fp);
+        if (info_last.magic == DISPLAY_TIME_T_MAGIC) {
+            ESP_LOGI(TAG, "Last time: %s at (%d, %d)", info_last.text, info_last.x, info_last.y);
+            epd_write_string(font, info_last.text, &info_last.x, &info_last.y, fb, &font_props);
+        }
+        fclose(fp);
+    }
+
     time_t now;
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    strftime(time_now, sizeof(time_now), "%H:%M", &timeinfo);
-    int cursor_x = epd_rotated_display_width() / 2;
-    int cursor_y = epd_rotated_display_height() / 2 - 250;
-    epd_write_string(font, time_now, &cursor_x, &cursor_y, fb, &font_props);
-    epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
-    // epd_hl_update_screen(&hl, MODE_GC16, TEMPERATURE);
+    strftime(info.text, sizeof(info.text), "%H:%M", &timeinfo);
+    ESP_LOGI(TAG, "Display current time: %s at (%d, %d)", info.text, info.x, info.y);
+    epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
+    // save to filename_last_time
+    fp = fopen(filename_last_time, "w");
+    if (fp) {
+        info.magic = DISPLAY_TIME_T_MAGIC;
+        fwrite(&info, 1, sizeof(info), fp);
+        fclose(fp);
+    }
 }
 
 void finish_system(void) {
+    epd_poweron();
+    // finally update screen
+    // epd_hl_update_screen(&hl, MODE_GC16, 25);
+    epd_hl_update_screen(&hl, MODE_GL16, 25);
     epd_poweroff();
     fb_save_compressed();
     epd_deinit();
@@ -915,20 +849,21 @@ void app_main(void) {
         closedir(d);
     }
 
-    epd_poweron();
-    if (esp_reset_reason() == ESP_RST_POWERON) {
-        ESP_LOGI(TAG, "Power on reset, reload buffers");
-        // epd_fullclear(&hl, TEMPERATURE);
-        do_display(filename_current_image);
-    } else {
-        if (ESP_OK != fb_load_compressed()) {
-            ESP_LOGE(TAG, "fb_load_compressed failed");
+    {
+        epd_poweron();
+        if (esp_reset_reason() == ESP_RST_POWERON) {
+            ESP_LOGI(TAG, "Power on reset, reload buffers");
+            // epd_fullclear(&hl, TEMPERATURE);
+            do_display(filename_current_image);
+        } else {
+            if (ESP_OK != fb_load_compressed()) {
+                ESP_LOGE(TAG, "fb_load_compressed failed");
+            }
         }
-        epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
+        display_time();
+        finish_system();
+        return;
     }
-    display_time();
-
-    finish_system();
 
     // struct stat st;
     // // display current image, or fallback
@@ -948,24 +883,21 @@ void app_main(void) {
     //     }
     // }
 
-    // ret = download_image();
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(TAG, "download_image failed");
-    // } else {
-    //     ESP_LOGI(TAG, "download_image success");
-    //     // delete fallback image
-    //     unlink(filename_fallback_image);
-    //     // move current image to fallback image
-    //     rename(filename_current_image, filename_fallback_image);
-    //     // move temp file to final file
-    //     rename(filename_temp_image, filename_current_image);
-    // }
-
-    // epd_poweron();
+    ret = download_image();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "download_image failed");
+    } else {
+        ESP_LOGI(TAG, "download_image success");
+        // delete fallback image
+        unlink(filename_fallback_image);
+        // move current image to fallback image
+        rename(filename_current_image, filename_fallback_image);
+        // move temp file to final file
+        rename(filename_temp_image, filename_current_image);
+    }
 
     // then display current image, or fallback
     do_display(filename_current_image);
     display_time();
-    fb_save_compressed();
     finish_system();
 }

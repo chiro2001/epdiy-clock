@@ -23,14 +23,14 @@
 // #define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
 // #define IMG_URL ("https://loremflickr.com/1448/1072")
 
-#define IMG_URL "https://img.moehu.org/pic.php?id=img1"
-#define IMG_HOST "img.moehu.org"
+// #define IMG_URL "https://img.moehu.org/pic.php?id=img1"
+// #define IMG_HOST "img.moehu.org"
 
 // #define IMG_URL "https://loremflickr.com/1448/1072"
 // #define IMG_HOST "loremflickr.com"
 
-// #define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
-// #define IMG_HOST "192.168.31.141"
+#define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
+#define IMG_HOST "192.168.31.141"
 
 // #define IMG_URL "http://192.168.31.141:8080/diannnnnna.png"
 // #define IMG_HOST "192.168.31.141"
@@ -64,5 +64,9 @@ static const char *filename_fb = "/spiflash/fb.raw";
 static const char *filename_fb_compressed_front = "/spiflash/fb_front.miniz";
 static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
 static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
+static const char *filename_last_time = "/spiflash/last_time.dat";
+
+// #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
+#define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
 
 #endif

@@ -7,6 +7,7 @@ set(app_sources
   "wifi.c"
   "font/time_traveler.c"
   "compress.c"
+  "fb_save_load.c"
 )
 # file(GLOB_RECURSE app_resources res/*)
 
