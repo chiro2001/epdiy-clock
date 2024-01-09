@@ -6,6 +6,7 @@ set(app_sources
   "time_sync.c"
   "wifi.c"
   "font/time_traveler.c"
+  "compress.c"
 )
 # file(GLOB_RECURSE app_resources res/*)
 
@@ -25,6 +26,7 @@ idf_component_register(
     spiffs
     vfs
     pngle
+    zlib
   EMBED_TXTFILES ${project_dir}/res/ssl_cert/server_cert.pem
 )
 

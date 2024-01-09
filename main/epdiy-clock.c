@@ -1,8 +1,5 @@
 #include "common.h"
-#include "esp_heap_caps.h"
-#include "miniz.h"
-#include "settings.h"
-#include <stdio.h>
+#include "esp_err.h"
 
 /// global variables
 
@@ -776,50 +773,22 @@ int fb_save_compressed_stream(const void *pBuf, int len, void *pUser) {
 
 esp_err_t fb_save_compressed() {
     // save framebuffer to file
-    FILE *fp;
     int fb_size = epd_width() / 2 * epd_height();
-    ESP_LOGI(TAG, "Writing %d bytes (%d KiB)", fb_size * 4, fb_size * 4 / 1024);
-    printf("fb_save_compressed, tdefl_init@%p, tdefl_compress_buffer@%p", tdefl_init, tdefl_compress_buffer);
-    fflush(stdout);
-    tdefl_compressor comp;
-    size_t wr = 0;
-    fp = fopen(filename_fb_compressed_front, "wb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return ESP_FAIL;
-    }
-    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
-    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.front_fb, fb_size, TDEFL_FINISH)) {
-        ESP_LOGE(TAG, "tdefl_compress_buffer front failed!");
-    }
-    wr += ftell(fp);
-    fclose(fp);
-    
-    fp = fopen(filename_fb_compressed_back, "wb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return ESP_FAIL;
-    }
-    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
-    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.back_fb, fb_size, TDEFL_FINISH)) {
-        ESP_LOGE(TAG, "tdefl_compress_buffer back failed!");
-    }
-    wr += ftell(fp);
-    fclose(fp);
+    ESP_LOGI(TAG, "Writing %d bytes (%d KiB) from mem", fb_size * 4, fb_size * 4 / 1024);
 
-    fp = fopen(filename_fb_compressed_diff, "wb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
-        return ESP_FAIL;
+    esp_err_t r;
+    if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_front, hl.front_fb, fb_size, Z_BEST_SPEED))) {
+        ESP_LOGE(TAG, "compress_mem_to_file front failed!");
+        return r;
     }
-    tdefl_init(&comp, fb_save_compressed_stream, fp, TDEFL_DEFAULT_MAX_PROBES);
-    if (TDEFL_STATUS_OKAY != tdefl_compress_buffer(&comp, hl.difference_fb, fb_size * 2, TDEFL_FINISH)) {
-        ESP_LOGE(TAG, "tdefl_compress_buffer difference failed!");
+    if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_back, hl.back_fb, fb_size, Z_BEST_SPEED))) {
+        ESP_LOGE(TAG, "compress_mem_to_file back failed!");
+        return r;
     }
-    wr += ftell(fp);
-    fclose(fp);
-
-    ESP_LOGI(TAG, "Wrote compressed %d bytes (%d KiB)", wr, wr / 1024);
+    // if (ESP_OK != (r = compress_mem_to_file(filename_fb_compressed_diff, hl.difference_fb, fb_size * 2, Z_BEST_SPEED))) {
+    //     ESP_LOGE(TAG, "compress_mem_to_file difference failed!");
+    //     return r;
+    // }
     return ESP_OK;
 }
 
@@ -850,58 +819,24 @@ esp_err_t fb_load() {
 
 esp_err_t fb_load_compressed() {
     // load framebuffer from file
-    FILE *fp;
     int fb_size = epd_width() / 2 * epd_height();
-    unsigned int rd;
-    uint8_t *buf = (uint8_t*)heap_caps_malloc(fb_size * 2, MALLOC_CAP_SPIRAM);
-    if (!buf) {
-        ESP_LOGE(TAG, "Failed to allocate memory for buf");
-        return ESP_FAIL;
+    esp_err_t r;
+    if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_front, hl.front_fb, fb_size))) {
+        ESP_LOGE(TAG, "decompress_file_to_mem front failed!");
+        return r;
     }
-    
-    fp = fopen(filename_fb_compressed_front, "rb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        return ESP_FAIL;
+    if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_back, hl.back_fb, fb_size))) {
+        ESP_LOGE(TAG, "decompress_file_to_mem back failed!");
+        return r;
     }
-    if (0 == (rd = fread(buf, 1, fb_size, fp))) {
-        ESP_LOGE(TAG, "fread front fb failed!");
-    }
-    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.front_fb, fb_size, buf, rd, 0)) {
-        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem front failed!");
-    }
-    fclose(fp);
-
-    fp = fopen(filename_fb_compressed_back, "rb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        return ESP_FAIL;
-    }
-    if (0 == (rd = fread(buf, 1, fb_size, fp))) {
-        ESP_LOGE(TAG, "fread back fb failed!");
-    }
-    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.back_fb, fb_size, buf, rd, 0)) {
-        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem back failed!");
-    }
-    fclose(fp);
-
-    fp = fopen(filename_fb_compressed_diff, "rb");
-    if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        return ESP_FAIL;
-    }
-    if (0 == (rd = fread(buf, 1, fb_size * 2, fp))) {
-        ESP_LOGE(TAG, "fread difference fb failed!");
-    }
-    if (TDEFL_STATUS_OKAY != tinfl_decompress_mem_to_mem(hl.difference_fb, fb_size * 2, buf, rd, 0)) {
-        ESP_LOGE(TAG, "tinfl_decompress_mem_to_mem difference failed!");
-    }
-    fclose(fp);
-    heap_caps_free(buf);
+    // if (ESP_OK != (r = decompress_file_to_mem(filename_fb_compressed_diff, hl.difference_fb, fb_size * 2))) {
+    //     ESP_LOGE(TAG, "decompress_file_to_mem difference failed!");
+    //     return r;
+    // }
     return ESP_OK;
 }
 
-void draw_time() {
+void display_time() {
     EpdFontProperties font_props = epd_font_properties_default();
     font_props.flags = EPD_DRAW_ALIGN_CENTER;
     // font_props.fg_color = 0xf;
@@ -920,7 +855,7 @@ void draw_time() {
 
 void finish_system(void) {
     epd_poweroff();
-    // fb_save_compressed();
+    fb_save_compressed();
     epd_deinit();
     esp_vfs_spiffs_unregister(storage_partition_label);
     deepsleep();
@@ -961,6 +896,7 @@ void app_main(void) {
     print_time();
     // auto request and save time in NVS
     if (esp_reset_reason() == ESP_RST_POWERON) {
+        ESP_LOGI(TAG, "Power on reset, force time update");
         fetch_and_store_time_in_nvs(NULL);
     }
     update_time_from_nvs();
@@ -979,7 +915,20 @@ void app_main(void) {
         closedir(d);
     }
 
-    // fb_load_compressed();
+    epd_poweron();
+    if (esp_reset_reason() == ESP_RST_POWERON) {
+        ESP_LOGI(TAG, "Power on reset, reload buffers");
+        // epd_fullclear(&hl, TEMPERATURE);
+        do_display(filename_current_image);
+    } else {
+        if (ESP_OK != fb_load_compressed()) {
+            ESP_LOGE(TAG, "fb_load_compressed failed");
+        }
+        epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
+    }
+    display_time();
+
+    finish_system();
 
     // struct stat st;
     // // display current image, or fallback
@@ -1012,12 +961,11 @@ void app_main(void) {
     //     rename(filename_temp_image, filename_current_image);
     // }
 
-    epd_poweron();
+    // epd_poweron();
 
     // then display current image, or fallback
     do_display(filename_current_image);
-    draw_time();
-    // printf("calling fb_save_compressed();\n");
-    // fb_save_compressed();
+    display_time();
+    fb_save_compressed();
     finish_system();
 }

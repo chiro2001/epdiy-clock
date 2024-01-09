@@ -40,7 +40,8 @@
 #include "esp_vfs.h"
 // #include "esp_vfs_fat.h"
 #include "esp_spiffs.h"
-#include "miniz.h"
+#include "zlib.h"
+#include "compress.h"
 // font
 #include "font/time_traveler.h"
 
