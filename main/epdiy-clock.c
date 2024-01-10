@@ -934,6 +934,8 @@ void display_time() {
     time_t now;
     struct tm timeinfo;
     time(&now);
+    // show time of 1min later
+    now += 60;
     localtime_r(&now, &timeinfo);
     strftime(info.text, sizeof(info.text), TIME_FMT, &timeinfo);
     ESP_LOGI(TAG, "Display current time: %s at (%d, %d)", info.text, info.x, info.y);
@@ -1022,6 +1024,46 @@ void do_shuffle_images(void) {
     }
 }
 
+void do_download_display(void) {
+    // download image ever TIME_DOWNLOAD_MINUTE
+    FILE *fp;
+    time_t now;
+    bool will_download = false;
+    will_download = esp_reset_reason() == ESP_RST_POWERON || count_image() == 0;
+    if (!will_download) {
+        time(&now);
+        // get last time from `filename_last_download'
+        fp = fopen(filename_last_download, "r");
+        if (fp) {
+            time_t last_download_time;
+            fread(&last_download_time, 1, sizeof(last_download_time), fp);
+            fclose(fp);
+            if (now - last_download_time > TIME_DOWNLOAD_MINUTE * 60) {
+                will_download = true;
+            }
+        } else {
+            will_download = true;
+        }
+    }
+    if (will_download) {
+        ESP_LOGI(TAG, "Download image");
+        esp_err_t r = download_image();
+        if (r != ESP_OK) {
+            ESP_LOGE(TAG, "download_image failed");
+        } else {
+            epd_poweron();
+            epd_fullclear(&hl, TEMPERATURE);
+            do_display(filename_current_image);
+        }
+        // save current time to `filename_last_download'
+        fp = fopen(filename_last_download, "w");
+        if (fp) {
+            fwrite(&now, 1, sizeof(now), fp);
+            fclose(fp);
+        }
+    }
+}
+
 void app_main(void) {
   ESP_LOGI(TAG, "START!");
   enum EpdInitOptions init_options = EPD_LUT_64K;
@@ -1054,13 +1096,10 @@ void app_main(void) {
     // Initialization: WiFi + clean screen while downloading image
     wifi_init_sta();
 
-    print_time();
     // auto request and save time in NVS
-    if (esp_reset_reason() == ESP_RST_POWERON) {
-        ESP_LOGI(TAG, "Power on reset, force time update");
-        fetch_and_store_time_in_nvs(NULL);
-        update_time_from_nvs();
-    } else {
+    if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
+        print_time();
+        ESP_LOGI(TAG, "Wakeup not from deepsleep, force time update");
         fetch_and_store_time_in_nvs(NULL);
         update_time_from_nvs();
     }
@@ -1098,17 +1137,8 @@ void app_main(void) {
     //     return;
     // }
 
-    if (esp_reset_reason() == ESP_RST_POWERON || count_image() == 0) {
-        epd_poweron();
-        ret = download_image();
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "download_image failed");
-            epd_fullclear(&hl, TEMPERATURE);
-            do_display(filename_current_image);
-        } else {
-            ESP_LOGI(TAG, "download_image success");
-        }
-    }
+    do_download_display();
+
     // bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
     // if (!bg_img) {
     //     ESP_LOGE(TAG, "Failed to allocate memory for bg");
