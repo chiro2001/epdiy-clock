@@ -950,6 +950,66 @@ void finish_system(void) {
     deepsleep();
 }
 
+void do_clean_screen(void) {
+    // clean screen every TIME_CLEAR_MINUTE
+    bool will_clean = false;
+    time_t now;
+    time(&now);
+    // get last time from `filename_last_clean_screen'
+    FILE *fp = fopen(filename_last_clean_screen, "r");
+    if (fp) {
+        time_t last_clean_time;
+        fread(&last_clean_time, 1, sizeof(last_clean_time), fp);
+        fclose(fp);
+        if (now - last_clean_time > TIME_CLEAR_MINUTE * 60) {
+            will_clean = true;
+        }
+    } else {
+        will_clean = true;
+    }
+    if (will_clean) {
+        ESP_LOGI(TAG, "Clean screen");
+        epd_poweron();
+        epd_fullclear(&hl, TEMPERATURE);
+        epd_poweroff();
+        // save current time to `filename_last_clean_screen'
+        fp = fopen(filename_last_clean_screen, "w");
+        if (fp) {
+            fwrite(&now, 1, sizeof(now), fp);
+            fclose(fp);
+        }
+    }
+}
+
+void do_shuffle_images(void) {
+    // suffle images every `TIME_SHUFFLE_MINUTE'
+    bool will_shuffle = false;
+    time_t now;
+    time(&now);
+    // get last time from `filename_last_shuffle_images'
+    FILE *fp = fopen(filename_last_shuffle_images, "r");
+    if (fp) {
+        time_t last_shuffle_time;
+        fread(&last_shuffle_time, 1, sizeof(last_shuffle_time), fp);
+        fclose(fp);
+        if (now - last_shuffle_time > TIME_SHUFFLE_MINUTE * 60) {
+            will_shuffle = true;
+        }
+    } else {
+        will_shuffle = true;
+    }
+    if (will_shuffle) {
+        ESP_LOGI(TAG, "Shuffle images");
+        shuffle_images();
+        // save current time to `filename_last_shuffle_images'
+        fp = fopen(filename_last_shuffle_images, "w");
+        if (fp) {
+            fwrite(&now, 1, sizeof(now), fp);
+            fclose(fp);
+        }
+    }
+}
+
 void app_main(void) {
   ESP_LOGI(TAG, "START!");
   enum EpdInitOptions init_options = EPD_LUT_64K;
@@ -995,6 +1055,9 @@ void app_main(void) {
     // print time now
     print_time();
 
+    do_clean_screen();
+    do_shuffle_images();
+
     // list files
     DIR *d;
     struct dirent *dir;
@@ -1023,24 +1086,6 @@ void app_main(void) {
     //     return;
     // }
 
-    // struct stat st;
-    // // display current image, or fallback
-    // if (stat(filename_current_image, &st) == 0) {
-    //     // file exists
-    //     do_display(filename_current_image);
-    // } else {
-    //     // file doesn't exist
-    //     if (stat(filename_fallback_image, &st) == 0) {
-    //         // file exists
-    //         do_display(filename_fallback_image);
-    //     } else {
-    //         // file doesn't exist
-    //         ESP_LOGE(TAG, "No image to display");
-    //         // finish_system();
-    //         // return;
-    //     }
-    // }
-
     if (esp_reset_reason() == ESP_RST_POWERON) {
         ret = download_image();
         if (ret != ESP_OK) {
@@ -1050,51 +1095,19 @@ void app_main(void) {
         } else {
             ESP_LOGI(TAG, "download_image success");
         }
-
-        // display_time();
-
-        bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
-        if (!bg_img) {
-            ESP_LOGE(TAG, "Failed to allocate memory for bg");
-            finish_system();
-            return;
-        }
-        memcpy(bg_img, fb, epd_width() / 2 * epd_height());
-        
-        epd_poweron();
-        for (int i = 0; i < 10; i++) {
-            shuffle_images();
-            do_display(filename_current_image);
-            display_time();
-            epd_hl_update_screen(&hl, MODE_GL16, 25);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-
-        finish_system();
-    } else {
-        shuffle_images();
-        // do_display(filename_current_image);
-
-        bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
-        if (!bg_img) {
-            ESP_LOGE(TAG, "Failed to allocate memory for bg");
-            finish_system();
-            return;
-        }
-        memcpy(bg_img, fb, epd_width() / 2 * epd_height());
-        
-        epd_fullclear(&hl, TEMPERATURE);
-        epd_poweron();
-        for (int i = 0; i < 10; i++) {
-            shuffle_images();
-            do_display(filename_current_image);
-            display_time();
-            epd_hl_update_screen(&hl, MODE_GL16, 25);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-
-        // display_time();
-
-        finish_system();
     }
+    bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
+    if (!bg_img) {
+        ESP_LOGE(TAG, "Failed to allocate memory for bg");
+        finish_system();
+        return;
+    }
+    memcpy(bg_img, fb, epd_width() / 2 * epd_height());
+    
+    epd_fullclear(&hl, TEMPERATURE);
+    do_display(filename_current_image);
+    display_time();
+    epd_hl_update_screen(&hl, MODE_GL16, 25);
+
+    finish_system();
 }

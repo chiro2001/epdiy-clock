@@ -12,7 +12,7 @@
 #define EPDIY_USE_HIMEM 1
 
 /// Deepsleep configuration
-#define DEEPSLEEP_MINUTES_AFTER_RENDER 2
+#define DEEPSLEEP_MINUTES_AFTER_RENDER 1
 
 /// ssl
 // #define VALIDATE_SSL_CERTIFICATE 1
@@ -60,8 +60,10 @@
 
 /// time
 #define TIME_ZONE "CST-8"
-#define TIME_FMT "%H:%M:%S"
-// #define TIME_FMT "%H:%M"
+// #define TIME_FMT "%H:%M:%S"
+#define TIME_FMT "%H:%M"
+#define TIME_CLEAR_MINUTE 10
+#define TIME_SHUFFLE_MINUTE 30
 
 /// storage
 static const char *storage_base_path = "/spiflash";
@@ -74,6 +76,8 @@ static const char *filename_fb_compressed_front = "/spiflash/fb_front.miniz";
 static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
 static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
 static const char *filename_last_time = "/spiflash/last_time.dat";
+static const char *filename_last_clean_screen = "/spiflash/last_clean_screen.timestamp";
+static const char *filename_last_shuffle_images = "/spiflash/last_shuffle_images.timestamp";
 
 #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
 // #define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
