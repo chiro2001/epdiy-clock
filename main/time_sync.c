@@ -30,6 +30,7 @@
 
 #include "request.h"
 #include "settings.h"
+#include "json_parser.h"
 
 static const char *TAG = "time_sync";
 
@@ -43,6 +44,15 @@ extern const uint8_t
 void set_time_zone(void) {
   setenv("TZ", TIME_ZONE, 1);
   tzset();
+}
+
+void set_timestamp(uint64_t timestamp) {
+  struct timeval set_time;
+  struct timezone tz;
+  set_time_zone();
+  gettimeofday(&set_time, &tz);
+  set_time.tv_sec = timestamp;
+  settimeofday(&set_time, &tz);
 }
 
 void print_time() {
@@ -141,7 +151,9 @@ esp_err_t _time_http_event_handler(esp_http_client_event_t *evt) {
   case HTTP_EVENT_ON_DATA:
     ESP_LOGI(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
     // write to user_data, simply short string
-    memcpy(evt->user_data, evt->data, evt->data_len);
+    uint8_t **data = (uint8_t **)evt->user_data;
+    memcpy(*data, evt->data, evt->data_len);
+    (*data) += evt->data_len;
     break;
   case HTTP_EVENT_ON_FINISH:
     ESP_LOGI(TAG, "HTTP_EVENT_ON_FINISH");
@@ -171,7 +183,8 @@ static esp_err_t obtain_time_http(void) {
   }
   memset(buf, 0x00, HTTP_RECEIVE_BUFFER_SIZE);
   esp_http_client_handle_t client = esp_http_client_init(&config);
-  esp_http_client_set_user_data(client, buf);
+  uint8_t *p = buf;
+  esp_http_client_set_user_data(client, &p);
   esp_err_t err = esp_http_client_perform(client);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Error fetching time from server");
@@ -179,20 +192,49 @@ static esp_err_t obtain_time_http(void) {
     return err;
   }
   ESP_LOGI(TAG, "message: %s", buf);
-  uint64_t unix_minute_time = 0;
-  sscanf((char *)buf, "%lld", &unix_minute_time);
-  ESP_LOGI(TAG, "unix_minute_time=%lld, unix_timestamp is %lld", unix_minute_time, unix_minute_time * 60);
-  if (unix_minute_time == 0) {
-    ESP_LOGE(TAG, "Error parsing time from server");
-    err = ESP_FAIL;
+  if (buf[0] <= '9' && buf[0] >= '0') {
+    ESP_LOGI(TAG, "First character is a number, assuming unix timestamp");
+    uint64_t unix_minute_time = 0;
+    sscanf((char *)buf, "%lld", &unix_minute_time);
+    ESP_LOGI(TAG, "unix_minute_time=%lld, unix_timestamp is %lld", unix_minute_time, unix_minute_time * 60);
+    if (unix_minute_time == 0) {
+      ESP_LOGE(TAG, "Error parsing time from server");
+      err = ESP_FAIL;
+    } else {
+      set_timestamp(unix_minute_time * 60);
+      print_time();
+    }
   } else {
-    struct timeval set_time;
-    struct timezone tz;
-    set_time_zone();
-    gettimeofday(&set_time, &tz);
-    set_time.tv_sec = unix_minute_time * 60;
-    settimeofday(&set_time, &tz);
-    print_time();
+    ESP_LOGI(TAG, "First character is not a number, assuming json");
+/*
+{
+  "abbreviation":"CST",
+  "client_ip":"2406:da18:661:4100:181d:d9e0:3d8d:d64d",
+  "datetime":"2024-01-10T18:16:40.325223+08:00",
+  "day_of_week":3,
+  "day_of_year":10,
+  "dst":false,
+  "dst_from":null,
+  "dst_offset":0,
+  "dst_until":null,
+  "raw_offset":28800,
+  "timezone":"Asia/Shanghai",
+  "unixtime":1704881800,
+  "utc_datetime":"2024-01-10T10:16:40.325223+00:00",
+  "utc_offset":"+08:00",
+  "week_number":2
+}
+*/
+    jparse_ctx_t jctx;
+    json_parse_start(&jctx, (char *)buf, strlen((char *)buf));
+    int64_t unix_time = 0;
+    if (json_obj_get_int64(&jctx, "unixtime", &unix_time) != 0) {
+      ESP_LOGE(TAG, "Error parsing time from server");
+      err = ESP_FAIL;
+    } else {
+      set_timestamp(unix_time);
+      print_time();
+    }
   }
   free(buf);
   return err;
@@ -266,6 +308,17 @@ esp_err_t update_time_from_nvs(void) {
       err = ESP_OK;
     }
   } else if (err == ESP_OK) {
+    struct tm timeinfo;
+    localtime_r(&timestamp, &timeinfo);
+    // if 1970, retry
+    if (timeinfo.tm_year == 70) {
+      ESP_LOGI(TAG, "Time found in NVS, but it's 1970. Syncing time from server.");
+      if (fetch_and_store_time_in_nvs(NULL) != ESP_OK) {
+        err = ESP_FAIL;
+      } else {
+        err = ESP_OK;
+      }
+    }
     ESP_LOGI(TAG, "Time found in NVS. Setting time to %lld", timestamp);
     struct timeval set_time;
     struct timezone tz;

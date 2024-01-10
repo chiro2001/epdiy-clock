@@ -5,6 +5,18 @@ dependencies:
       service_url: https://api.components.espressif.com/
       type: service
     version: 1.0.5~2
+  espressif/jsmn:
+    component_hash: d80350c41bbaa827c98a25b6072df00884e72f54885996fab4a4f0aebce6b6c3
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 1.1.0
+  espressif/json_parser:
+    component_hash: d74b81729ad06ec11ff5eb5b1b0d7df1d00e6027fc11471f4b139c70dcf1b1e4
+    source:
+      service_url: https://api.components.espressif.com/
+      type: service
+    version: 1.0.3
   espressif/zlib:
     component_hash: 999ec50086ac1c82b8321d8f540dc9fd10f5622948b935558aa16b4b66e95d9d
     source:
@@ -16,6 +28,6 @@ dependencies:
     source:
       type: idf
     version: 5.1.2
-manifest_hash: 90dee91e9e0b02dcfae20ece3b209f862aad67ea3db3239b76fa68ae0922bf2c
+manifest_hash: 575684130a0e9939c792a5a7299d14c7838f6cba4dd028d11444eedbeb0194d8
 target: esp32
 version: 1.0.0
