@@ -91,6 +91,7 @@ esp_err_t shuffle_images(void) {
         return ESP_FAIL;
     }
     char *filenames[16] = {0};
+    memset(filenames, 0, sizeof(filenames));
     char **p = filenames;
     while ((dir = readdir(d)) != NULL) {
         ESP_LOGD(TAG, "%s", dir->d_name);
@@ -99,6 +100,7 @@ esp_err_t shuffle_images(void) {
             ESP_LOGD(TAG, "Found image %s", dir->d_name);
             *p = (char*)malloc(strlen(dir->d_name) + 1);
             strcpy(*p, dir->d_name);
+            p++;
         }
     }
     closedir(d);
@@ -114,7 +116,7 @@ esp_err_t shuffle_images(void) {
     // srand(time(NULL));
     // int r = rand() % cnt;
     int r = esp_random() % cnt;
-    ESP_LOGI(TAG, "Randomly picked %s", filenames[r]);
+    ESP_LOGI(TAG, "Randomly picked %s from %d images", filenames[r], cnt);
     // link to filename_current_image
     // int ret = link(filenames[r], filename_current_image);
     char full_path[64];
@@ -151,6 +153,7 @@ esp_err_t random_unlink_image(void) {
             ESP_LOGD(TAG, "Found image %s", dir->d_name);
             *p = (char*)malloc(strlen(dir->d_name) + 1);
             strcpy(*p, dir->d_name);
+            p++;
         }
     }
     closedir(d);
