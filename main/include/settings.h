@@ -46,7 +46,8 @@
 #define ESP_WIFI_PASSWORD "2001106504B"
 
 /// network
-#define HTTP_RECEIVE_BUFFER_SIZE 1986
+// #define HTTP_RECEIVE_BUFFER_SIZE 1986
+#define HTTP_RECEIVE_BUFFER_SIZE (1024 * 8)
 // plz set CONFIG_LWIP_SNTP_MAX_SERVERS=3
 // #define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(3,
 //                           ESP_SNTP_SERVER_LIST("ntp.chiro.work", "cn.pool.ntp.org", "time.windows.com") )

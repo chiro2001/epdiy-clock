@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include "epdiy.h"
 #include "wifi.h"
 #include "fb_save_load.h"
 #include "settings.h"
@@ -105,7 +106,7 @@ static uint32_t tjd_output(
         /* Optimization note: If we manage to apply here the epd_draw_pixel directly
            then it will be no need to keep a huge raw buffer (But will loose dither) */
         // decoded_image[yy * image_width + xx] = gamme_curve[val];
-        epd_draw_pixel(xx + padding_x, yy + padding_y, gamme_curve[val], fb);
+        epd_draw_pixel(xx + padding_x, yy + padding_y, gamme_curve[val], jd->device);
     }
 
     return 1;
@@ -129,9 +130,9 @@ static uint32_t feed_buffer(
     return count;
 }
 
-int draw_jpeg(uint8_t* source_buf) {
+int draw_jpeg(uint8_t* source_buf, uint8_t *current_fb) {
     feed_buffer_pos = 0;
-    rc = jd_prepare(&jd, feed_buffer, tjpgd_work, sizeof(tjpgd_work), &source_buf);
+    rc = jd_prepare(&jd, feed_buffer, tjpgd_work, sizeof(tjpgd_work), current_fb);
     if (rc != JDR_OK) {
         ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
         return ESP_FAIL;
@@ -177,13 +178,13 @@ static uint32_t feed_buffer_file(
     return count;
 }
 
-esp_err_t draw_jpeg_file(const char *filename) {
+esp_err_t draw_jpeg_file(const char *filename, uint8_t *current_fb) {
     fp_reading = fopen(filename, "rb");
     if (!fp_reading) {
         ESP_LOGE(TAG, "Failed to open file for reading");
         return ESP_FAIL;
     }
-    rc = jd_prepare(&jd, feed_buffer_file, tjpgd_work, sizeof(tjpgd_work), NULL);
+    rc = jd_prepare(&jd, feed_buffer_file, tjpgd_work, sizeof(tjpgd_work), current_fb);
     if (rc != JDR_OK) {
         ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
         return ESP_FAIL;
@@ -204,6 +205,25 @@ esp_err_t draw_jpeg_file(const char *filename) {
     ESP_LOGI("decode", "%" PRIu32 " ms . image decompression", time_decomp);
 
     return ESP_OK;
+}
+
+esp_err_t draw_raw_file(const char *filename, uint8_t *current_fb) {
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return ESP_FAIL;
+    }
+    int fb_size = epd_width() / 2 * epd_height();
+    size_t rd = fread(current_fb, 1, fb_size, fp);
+    if (rd != fb_size) {
+        ESP_LOGE(TAG, "fread fb failed! expected %d bytes, got %d", fb_size, rd);
+    }
+    fclose(fp);
+    return ESP_OK;
+}
+
+esp_err_t draw_compressed_file(const char *filename, uint8_t *current_fb) {
+    return fb_load_compressed_file(filename, current_fb);
 }
 
 void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t rgba[4]) {
@@ -253,7 +273,9 @@ void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     if (render_pixel_skip == 0) {
         for (uint32_t yy = 0; yy < h; yy++) {
             for (uint32_t xx = 0; xx < w; xx++) {
-                epd_draw_pixel(xx + x + padding_x, yy + y + padding_y, color, fb);
+                epd_draw_pixel(xx + x + padding_x, 
+                    yy + y + padding_y, 
+                    color, pngle_get_user_data(pngle));
             }
         }
     } else {
@@ -265,13 +287,14 @@ void on_draw_png(pngle_t *pngle, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                     continue;
                 }
                 epd_draw_pixel(xxx / render_pixel_skip + padding_x, 
-                yyy / render_pixel_skip + padding_y, color, fb);
+                    yyy / render_pixel_skip + padding_y, 
+                    color, pngle_get_user_data(pngle));
             }
         }
     }
 }
 
-int draw_png(uint8_t* source_buf, size_t size) {
+int draw_png(uint8_t* source_buf, size_t size, uint8_t *current_fb) {
     int r = 0;
     uint32_t decode_start = esp_timer_get_time();
     if (pngle != NULL) {
@@ -279,6 +302,7 @@ int draw_png(uint8_t* source_buf, size_t size) {
         pngle = NULL;
     }
     pngle = pngle_new();
+    pngle_set_user_data(pngle, current_fb);
     pngle_set_draw_callback(pngle, on_draw_png);
 
     r = pngle_feed(pngle, source_buf, size);
@@ -292,7 +316,7 @@ int draw_png(uint8_t* source_buf, size_t size) {
     return r;
 }
 
-esp_err_t draw_png_file(const char *filename) {
+esp_err_t draw_png_file(const char *filename, uint8_t *current_fb) {
     fp_reading = fopen(filename, "rb");
     if (!fp_reading) {
         ESP_LOGE(TAG, "Failed to open file for reading");
@@ -305,6 +329,7 @@ esp_err_t draw_png_file(const char *filename) {
         pngle = NULL;
     }
     pngle = pngle_new();
+    pngle_set_user_data(pngle, current_fb);
     pngle_set_draw_callback(pngle, on_draw_png);
 
     uint8_t buf[1024];
@@ -329,10 +354,10 @@ esp_err_t display_source_buf() {
     }
     epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
-    int r = draw_jpeg(source_buf);
+    int r = draw_jpeg(source_buf, fb);
     if (r == ESP_FAIL) {
         ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
-        r = draw_png(source_buf, data_len_total);
+        r = draw_png(source_buf, data_len_total, fb);
     }
     if (r == ESP_FAIL) {
         ESP_LOGE(TAG, "draw as png failed");
@@ -346,6 +371,39 @@ esp_err_t display_source_buf() {
         time_download + time_decomp + time_render
     );
     return ESP_OK;
+}
+
+esp_err_t convert_image_to_compress(const char *from, const char *to, uint8_t *current_fb) {
+    // create new fb
+    uint32_t fb_size = epd_width() / 2 * epd_height();
+    uint8_t *m_fb = current_fb;
+    if (!m_fb) {
+        m_fb = (uint8_t*)heap_caps_malloc(fb_size, MALLOC_CAP_SPIRAM);
+    }
+    if (!m_fb) {
+        ESP_LOGE(TAG, "Failed to allocate memory for fb");
+        return ESP_FAIL;
+    }
+    memset(m_fb, 0xFF, fb_size);
+    // draw image to fb
+    int r = draw_jpeg_file(from, m_fb);
+    if (r == ESP_FAIL) {
+        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        r = draw_png_file(from, m_fb);
+    }
+    if (r == ESP_FAIL) {
+        ESP_LOGE(TAG, "draw as png failed");
+        if (m_fb) {
+            free(m_fb);
+        }
+        return ESP_FAIL;
+    }
+    // save fb to file
+    r = compress_mem_to_file_zlib(to, m_fb, fb_size, FRAME_COMPRESS_LEVEL);
+    if (m_fb && !current_fb) {
+        free(m_fb);
+    }
+    return r;
 }
 
 // Download and write data to `filename_temp_image'
@@ -401,15 +459,13 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             // should be allocated after the Content-Length header was received.
             // assert(source_buf != NULL);
 
-            if (on_data_cnt == 1) {
+            if (!fp_downloading) {
                 time_download_start = esp_timer_get_time();
+                fp_downloading = fopen(filename_temp_image, "wb");
                 if (!fp_downloading) {
-                    fp_downloading = fopen(filename_temp_image, "wb");
-                    if (!fp_downloading) {
-                        ESP_LOGE(TAG, "Failed to open file for writing");
-                        download_err = true;
-                    }
-                }    
+                    ESP_LOGE(TAG, "Failed to open file for writing");
+                    download_err = true;
+                }
             }
             // Append received data into source_buf
             // memcpy(&source_buf[data_recv], evt->data, evt->data_len);
@@ -450,7 +506,12 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                 if (download_err) {
                     ESP_LOGE(TAG, "Download failed, deleting file");
                     unlink(filename_temp_image);
+                } else {
+                    ESP_LOGI(TAG, "Download finished, converting file");
+                    convert_image_to_compress(filename_temp_image, filename_current_image, fb);
                 }
+            } else {
+                ESP_LOGE(TAG, "fp_downloading is NULL");
             }
             break;
 
@@ -659,7 +720,9 @@ void print_time() {
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    ESP_LOGI(TAG, "The current date/time is: %s", asctime(&timeinfo));
+    char datetime_buf[48];
+    strftime(datetime_buf, sizeof(datetime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
+    ESP_LOGI(TAG, "The current date/time is: %s", datetime_buf);
 }
 
 esp_err_t download_image() {
@@ -717,15 +780,26 @@ esp_err_t init_flash_storage() {
 }
 
 esp_err_t do_display(const char *filename) {
+    // unlink filename_last_time
+    unlink(filename_last_time);
     epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, downloading_url);
-    esp_err_t r = draw_jpeg_file(filename);
-    if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
-        r = draw_png_file(filename);
+    esp_err_t r;
+    r = draw_compressed_file(filename, fb);
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "draw as compressed failed, try to draw as jpg");
+        r = draw_jpeg_file(filename, fb);
     }
-    if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as png failed");
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        r = draw_png_file(filename, fb);
+    }
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "draw as png failed, try to draw as raw");
+        r = draw_raw_file(filename, fb);
+    }
+    if (r != ESP_OK) {
+        ESP_LOGE(TAG, "draw as raw failed");
         return ESP_FAIL;
     }
     time_download = (esp_timer_get_time() - time_download_start) / 1000;
@@ -735,8 +809,6 @@ esp_err_t do_display(const char *filename) {
         "total", "%" PRIu32 " ms - total time spent\n",
         time_download + time_decomp + time_render
     );
-    // unlink filename_last_time
-    unlink(filename_last_time);
     return ESP_OK;
 }
 
@@ -753,21 +825,22 @@ void display_time() {
     font_props.flags = EPD_DRAW_ALIGN_CENTER | EPD_INV_BACKGROUND;
     // font_props.fg_color = 0xf;
     display_time_info info;
-    display_time_info info_last;
+    // display_time_info info_last;
+    FILE *fp;
 
     info.x = epd_rotated_display_width() / 2;
     info.y = epd_rotated_display_height() / 2 + 150;
 
     // if file `filename_last_time' exists, re-draw it
-    FILE *fp = fopen(filename_last_time, "r");
-    if (fp) {
-        fread(&info_last, 1, sizeof(info_last), fp);
-        if (info_last.magic == DISPLAY_TIME_T_MAGIC) {
-            ESP_LOGI(TAG, "Last time: %s at (%d, %d)", info_last.text, info_last.x, info_last.y);
-            epd_write_string(font, info_last.text, &info_last.x, &info_last.y, fb, &font_props);
-        }
-        fclose(fp);
-    }
+    // fp = fopen(filename_last_time, "r");
+    // if (fp) {
+    //     fread(&info_last, 1, sizeof(info_last), fp);
+    //     if (info_last.magic == DISPLAY_TIME_T_MAGIC) {
+    //         ESP_LOGI(TAG, "Last time: %s at (%d, %d)", info_last.text, info_last.x, info_last.y);
+    //         epd_write_string(font, info_last.text, &info_last.x, &info_last.y, fb, &font_props);
+    //     }
+    //     fclose(fp);
+    // }
 
     time_t now;
     struct tm timeinfo;
@@ -794,7 +867,7 @@ void finish_system(void) {
     epd_hl_update_screen(&hl, MODE_GC16, 25);
     // epd_hl_update_screen(&hl, MODE_GL16, 25);
     epd_poweroff();
-    fb_save_compressed();
+    // fb_save_compressed();
     epd_deinit();
     esp_vfs_spiffs_unregister(storage_partition_label);
     deepsleep();
@@ -854,20 +927,21 @@ void app_main(void) {
         closedir(d);
     }
 
-    {
-        if (esp_reset_reason() == ESP_RST_POWERON) {
-            ESP_LOGI(TAG, "Power on reset, reload buffers");
-            // epd_fullclear(&hl, TEMPERATURE);
-            do_display(filename_current_image);
-        } else {
-            if (ESP_OK != fb_load_compressed()) {
-                ESP_LOGE(TAG, "fb_load_compressed failed");
-            }
-        }
-        display_time();
-        finish_system();
-        return;
-    }
+    // {
+    //     if (esp_reset_reason() == ESP_RST_POWERON) {
+    //         ESP_LOGI(TAG, "Power on reset, reload buffers");
+    //         epd_poweron();
+    //         do_display(filename_current_image);
+    //     } else {
+    //         // if (ESP_OK != fb_load_compressed()) {
+    //         if (ESP_OK != fb_load_compressed_file(filename_current_image, hl.fb_front)) {
+    //             ESP_LOGE(TAG, "fb_load_compressed failed");
+    //         }
+    //     }
+    //     display_time();
+    //     finish_system();
+    //     return;
+    // }
 
     // struct stat st;
     // // display current image, or fallback
@@ -887,21 +961,20 @@ void app_main(void) {
     //     }
     // }
 
-    ret = download_image();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "download_image failed");
-    } else {
-        ESP_LOGI(TAG, "download_image success");
-        // delete fallback image
-        unlink(filename_fallback_image);
-        // move current image to fallback image
-        rename(filename_current_image, filename_fallback_image);
-        // move temp file to final file
-        rename(filename_temp_image, filename_current_image);
-    }
+    if (esp_reset_reason() == ESP_RST_POWERON) {
+        ret = download_image();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "download_image failed");
+            do_display(filename_current_image);
+        } else {
+            ESP_LOGI(TAG, "download_image success");
+        }
 
-    // then display current image, or fallback
-    do_display(filename_current_image);
-    display_time();
-    finish_system();
+        display_time();
+        finish_system();
+    } else {
+        do_display(filename_current_image);
+        display_time();
+        finish_system();
+    }
 }

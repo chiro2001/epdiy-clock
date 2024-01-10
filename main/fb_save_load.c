@@ -3,6 +3,14 @@
 #include "compress.h"
 
 const static char *TAG = "fb_save_load";
+// static esp_err_t (*compress_mem_to_file)(const char *, const uint8_t *,
+// size_t, int) = compress_mem_to_file_miniz; static esp_err_t
+// (*decompress_file_to_mem)(const char *, uint8_t *, size_t) =
+//     decompress_file_to_mem_miniz;
+static esp_err_t (*compress_mem_to_file)(const char *, const uint8_t *, size_t,
+                                         int) = compress_mem_to_file_zlib;
+static esp_err_t (*decompress_file_to_mem)(const char *, uint8_t *, size_t) =
+    decompress_file_to_mem_zlib;
 
 esp_err_t fb_save_raw() {
   // save framebuffer to file
@@ -32,15 +40,7 @@ esp_err_t fb_save_raw() {
   return ESP_OK;
 }
 
-int fb_save_compressed_stream(const void *pBuf, int len, void *pUser) {
-  unsigned int written = fwrite(pBuf, 1, len, (FILE *)pUser);
-  if (written != len) {
-    ESP_LOGE(TAG, "fwrite failed! expected %d, got %d", len, written);
-  }
-  return written == len;
-}
-
-esp_err_t fb_save_compressed_zlib() {
+esp_err_t fb_save_compressed() {
   // save framebuffer to file
   int fb_size = epd_width() / 2 * epd_height();
   ESP_LOGI(TAG, "Writing %d bytes (%d KiB) from mem", fb_size * 4,
@@ -95,7 +95,7 @@ esp_err_t fb_load() {
   return ESP_OK;
 }
 
-esp_err_t fb_load_compressed_zlib() {
+esp_err_t fb_load_compressed() {
   // load framebuffer from file
   int fb_size = epd_width() / 2 * epd_height();
   esp_err_t r;
@@ -117,10 +117,13 @@ esp_err_t fb_load_compressed_zlib() {
   return ESP_OK;
 }
 
-// esp_err_t fb_load_compressed_miniz() {
-
-// }
-
-esp_err_t fb_load_compressed() { return fb_load_compressed_zlib(); }
-
-esp_err_t fb_save_compressed() { return fb_save_compressed_zlib(); }
+esp_err_t fb_load_compressed_file(const char *filename, uint8_t *dest) {
+  // load framebuffer from file
+  int fb_size = epd_width() / 2 * epd_height();
+  esp_err_t r;
+  if (ESP_OK != (r = decompress_file_to_mem(filename, dest, fb_size))) {
+    ESP_LOGE(TAG, "decompress_file_to_mem %s failed!", filename);
+    return r;
+  }
+  return ESP_OK;
+}
