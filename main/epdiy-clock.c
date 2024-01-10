@@ -1,12 +1,15 @@
 #include "common.h"
 
 #include "epdiy.h"
+#include "esp_err.h"
 #include "wifi.h"
 #include "fb_save_load.h"
 #include "settings.h"
 #include "time_sync.h"
 #include "compress.h"
 #include "request.h"
+#include <stdlib.h>
+#include <unistd.h>
 
 /// global variables
 
@@ -21,6 +24,7 @@ const EpdFont* font = &TimeTraveler;
 uint8_t* source_buf = NULL;       // downloaded image
 static uint8_t tjpgd_work[3096];  // tjpgd 3096 is the minimum size
 uint8_t* fb;                      // EPD 2bpp buffer
+uint8_t* bg_img = NULL;           // background image
 static uint32_t feed_buffer_pos = 0;
 
 // opened files
@@ -58,6 +62,139 @@ static const char* jd_errors[] = {
     "Not supported JPEG standard"};
 
 uint8_t gamme_curve[256];
+
+esp_err_t link_image_file(const char *from, const char *to) {
+    // just write file name
+    FILE *fp = fopen(to, "w");
+    if (!fp) {
+        ESP_LOGE(TAG, "Failed to open file for writing");
+        return ESP_FAIL;
+    }
+    if (to[0] == '/') {
+        fprintf(fp, "%s", from);
+    } else {
+        fprintf(fp, "%s/%s", storage_base_path, from);
+    }
+    fclose(fp);
+    return ESP_OK;
+}
+
+esp_err_t shuffle_images(void) {
+    // list all img-*, then randomly link one to `filename_current_image'
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(storage_base_path);
+    if (!d) {
+        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        return ESP_FAIL;
+    }
+    char *filenames[16] = {0};
+    char **p = filenames;
+    while ((dir = readdir(d)) != NULL) {
+        ESP_LOGI(TAG, "%s", dir->d_name);
+        if (strncmp(dir->d_name, "img-", 4) == 0) {
+            // found an image
+            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            *p = (char*)malloc(strlen(dir->d_name) + 1);
+            strcpy(*p, dir->d_name);
+        }
+    }
+    closedir(d);
+    // randomly pick one
+    int cnt = 0;
+    while (filenames[cnt]) {
+        cnt++;
+    }
+    if (cnt == 0) {
+        ESP_LOGE(TAG, "No image found");
+        return ESP_FAIL;
+    }
+    srand(time(NULL));
+    int r = rand() % cnt;
+    ESP_LOGI(TAG, "Randomly picked %s", filenames[r]);
+    // link to filename_current_image
+    // int ret = link(filenames[r], filename_current_image);
+    esp_err_t ret = link_image_file(filenames[r], filename_current_image);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filenames[r], filename_current_image, ret);
+        ret = ESP_FAIL;
+    }
+    // free filenames
+    for (int i = 0; i < cnt; i++) {
+        if (filenames[i]) {
+            free(filenames[i]);
+        }
+    }
+    return ret;
+}
+
+esp_err_t random_unlink_image(void) {
+    // list all img-*, then randomly unlink one
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(storage_base_path);
+    if (!d) {
+        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        return ESP_FAIL;
+    }
+    char *filenames[16] = {0};
+    char **p = filenames;
+    while ((dir = readdir(d)) != NULL) {
+        ESP_LOGI(TAG, "%s", dir->d_name);
+        if (strncmp(dir->d_name, "img-", 4) == 0) {
+            // found an image
+            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            *p = (char*)malloc(strlen(dir->d_name) + 1);
+            strcpy(*p, dir->d_name);
+        }
+    }
+    closedir(d);
+    // randomly pick one
+    int cnt = 0;
+    while (filenames[cnt]) {
+        cnt++;
+    }
+    if (cnt == 0) {
+        ESP_LOGE(TAG, "No image found");
+        return ESP_FAIL;
+    }
+    srand(time(NULL));
+    int r = rand() % cnt;
+    ESP_LOGI(TAG, "Randomly picked %s", filenames[r]);
+    // unlink
+    int ret = unlink(filenames[r]);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filenames[r], ret);
+    }
+    // free filenames
+    for (int i = 0; i < cnt; i++) {
+        if (filenames[i]) {
+            free(filenames[i]);
+        }
+    }
+    return ret;
+}
+
+int count_image(void) {
+    // count all img-*
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(storage_base_path);
+    if (!d) {
+        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        return ESP_FAIL;
+    }
+    int cnt = 0;
+    while ((dir = readdir(d)) != NULL) {
+        ESP_LOGI(TAG, "%s", dir->d_name);
+        if (strncmp(dir->d_name, "img-", 4) == 0) {
+            // found an image
+            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            cnt++;
+        }
+    }
+    return cnt;
+}
 
 void generate_gamme(double gamma_value) {
   double gammaCorrection = 1.0 / gamma_value;
@@ -487,10 +624,12 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             // Do not draw if it's a redirect (302)
             if (esp_http_client_get_status_code(evt->client) == 200) {
                 data_len_total = data_recv;
-                esp_err_t r = display_source_buf();
-                if (r != ESP_OK) {
-                    ESP_LOGE(TAG, "display_source_buf failed");
-                    // return r;
+                if (source_buf) {
+                    esp_err_t r = display_source_buf();
+                    if (r != ESP_OK) {
+                        ESP_LOGE(TAG, "display_source_buf failed");
+                        // return r;
+                    }
                 }
             }
             break;
@@ -506,7 +645,28 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     unlink(filename_temp_image);
                 } else {
                     ESP_LOGI(TAG, "Download finished, converting file");
-                    convert_image_to_compress(filename_temp_image, filename_current_image, fb);
+                    // unix_timestamp as filename
+                    time_t now;
+                    time(&now);
+                    char filename_img[32];
+                    sprintf(filename_img, "/spiffs/img-%lld", now);
+                    while (count_image() >= 12) {
+                        ESP_LOGI(TAG, "Too many images, randomly delete one");
+                        random_unlink_image();
+                    }
+                    esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(TAG, "convert_image_to_compress failed");
+                    }
+                    int r;
+                    r = link_image_file(filename_img, filename_current_image);
+                    if (r != 0) {
+                        ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
+                    }
+                    r = unlink(filename_temp_image);
+                    if (r != 0) {
+                        ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filename_temp_image, r);
+                    }
                 }
             } else {
                 ESP_LOGE(TAG, "fp_downloading is NULL");
@@ -674,21 +834,41 @@ esp_err_t init_flash_storage() {
 esp_err_t do_display(const char *filename) {
     // unlink filename_last_time
     unlink(filename_last_time);
-    epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, downloading_url);
+    char *linked_filename = (char *)filename;
+    char buf[128];
+    struct stat st;
+    if (stat(filename, &st) == 0) {
+        // file exists
+        ESP_LOGI(TAG, "File %s exists, size %lld", filename, st.st_size);
+        // small image file is a link
+        if (st.st_size < 10000) {
+            // int r = readlink(filename, buf, sizeof(buf));
+            FILE *fp = fopen(filename, "r");
+            if (!fp) {
+                ESP_LOGE(TAG, "Failed to open file for reading");
+                return ESP_FAIL;
+            }
+            int r = fread(buf, 1, sizeof(buf), fp);
+            fclose(fp);
+            buf[r] = 0;
+            ESP_LOGI(TAG, "File %s is a link to %s", filename, buf);
+            linked_filename = buf;
+        }
+    }
     esp_err_t r;
-    r = draw_compressed_file(filename, fb);
+    r = draw_compressed_file(linked_filename, fb);
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "draw as compressed failed, try to draw as jpg");
-        r = draw_jpeg_file(filename, fb);
+        r = draw_jpeg_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
-        r = draw_png_file(filename, fb);
+        r = draw_png_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "draw as png failed, try to draw as raw");
-        r = draw_raw_file(filename, fb);
+        r = draw_raw_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "draw as raw failed");
@@ -714,14 +894,19 @@ typedef struct display_time_info_t {
 
 void display_time() {
     EpdFontProperties font_props = epd_font_properties_default();
-    font_props.flags = EPD_DRAW_ALIGN_CENTER | EPD_INV_BACKGROUND;
+    font_props.flags = EPD_DRAW_ALIGN_CENTER | EPD_INV_BACKGROUND_BIN;
+    if (bg_img) {
+        font_props.bg = bg_img;
+    } else {
+        font_props.bg = fb;
+    }
     // font_props.fg_color = 0xf;
     display_time_info info;
     // display_time_info info_last;
     FILE *fp;
 
     info.x = epd_rotated_display_width() / 2;
-    info.y = epd_rotated_display_height() / 2 + 150;
+    info.y = epd_rotated_display_height() / 2 + 100;
 
     // if file `filename_last_time' exists, re-draw it
     // fp = fopen(filename_last_time, "r");
@@ -738,7 +923,7 @@ void display_time() {
     struct tm timeinfo;
     time(&now);
     localtime_r(&now, &timeinfo);
-    strftime(info.text, sizeof(info.text), "%H:%M", &timeinfo);
+    strftime(info.text, sizeof(info.text), TIME_FMT, &timeinfo);
     ESP_LOGI(TAG, "Display current time: %s at (%d, %d)", info.text, info.x, info.y);
     epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
     // save to filename_last_time
@@ -802,8 +987,11 @@ void app_main(void) {
     if (esp_reset_reason() == ESP_RST_POWERON) {
         ESP_LOGI(TAG, "Power on reset, force time update");
         fetch_and_store_time_in_nvs(NULL);
+        update_time_from_nvs();
+    } else {
+        fetch_and_store_time_in_nvs(NULL);
+        update_time_from_nvs();
     }
-    update_time_from_nvs();
     // print time now
     print_time();
 
@@ -857,16 +1045,56 @@ void app_main(void) {
         ret = download_image();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "download_image failed");
+            epd_fullclear(&hl, TEMPERATURE);
             do_display(filename_current_image);
         } else {
             ESP_LOGI(TAG, "download_image success");
         }
 
-        display_time();
+        // display_time();
+
+        bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
+        if (!bg_img) {
+            ESP_LOGE(TAG, "Failed to allocate memory for bg");
+            finish_system();
+            return;
+        }
+        memcpy(bg_img, fb, epd_width() / 2 * epd_height());
+        
+        epd_poweron();
+        for (int i = 0; i < 10; i++) {
+            shuffle_images();
+            do_display(filename_current_image);
+            display_time();
+            epd_hl_update_screen(&hl, MODE_GL16, 25);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
         finish_system();
     } else {
-        do_display(filename_current_image);
-        display_time();
+        shuffle_images();
+        // do_display(filename_current_image);
+
+        bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
+        if (!bg_img) {
+            ESP_LOGE(TAG, "Failed to allocate memory for bg");
+            finish_system();
+            return;
+        }
+        memcpy(bg_img, fb, epd_width() / 2 * epd_height());
+        
+        epd_fullclear(&hl, TEMPERATURE);
+        epd_poweron();
+        for (int i = 0; i < 10; i++) {
+            shuffle_images();
+            do_display(filename_current_image);
+            display_time();
+            epd_hl_update_screen(&hl, MODE_GL16, 25);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+        // display_time();
+
         finish_system();
     }
 }

@@ -12,8 +12,7 @@
 #define EPDIY_USE_HIMEM 1
 
 /// Deepsleep configuration
-// #define MILLIS_DELAY_BEFORE_SLEEP 2000
-#define DEEPSLEEP_MINUTES_AFTER_RENDER 6
+#define DEEPSLEEP_MINUTES_AFTER_RENDER 2
 
 /// ssl
 // #define VALIDATE_SSL_CERTIFICATE 1
@@ -23,14 +22,14 @@
 // #define IMG_URL ("http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg")
 // #define IMG_URL ("https://loremflickr.com/1448/1072")
 
-// #define IMG_URL "https://img.moehu.org/pic.php?id=img1"
-// #define IMG_HOST "img.moehu.org"
+#define IMG_URL "https://img.moehu.org/pic.php?id=img1"
+#define IMG_HOST "img.moehu.org"
 
 // #define IMG_URL "https://loremflickr.com/1448/1072"
 // #define IMG_HOST "loremflickr.com"
 
-#define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
-#define IMG_HOST "192.168.31.141"
+// #define IMG_URL "http://192.168.31.141:8080/70e412fc8067fa65798ec2f763c62373.jpg"
+// #define IMG_HOST "192.168.31.141"
 
 // #define IMG_URL "http://192.168.31.141:8080/diannnnnna.png"
 // #define IMG_HOST "192.168.31.141"
@@ -59,7 +58,10 @@
 #define TIME_SERVER_URL "http://worldtimeapi.org/api/timezone/Asia/Shanghai"
 #define TIME_SERVER_HOST "worldtimeapi.org"
 
+/// time
 #define TIME_ZONE "CST-8"
+#define TIME_FMT "%H:%M:%S"
+// #define TIME_FMT "%H:%M"
 
 /// storage
 static const char *storage_base_path = "/spiflash";
@@ -73,7 +75,7 @@ static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
 static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
 static const char *filename_last_time = "/spiflash/last_time.dat";
 
-// #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
-#define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
+#define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
+// #define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION
 
 #endif
