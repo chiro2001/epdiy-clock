@@ -2,6 +2,7 @@
 
 #include "epdiy.h"
 #include "esp_err.h"
+#include "esp_random.h"
 #include "wifi.h"
 #include "fb_save_load.h"
 #include "settings.h"
@@ -65,9 +66,10 @@ uint8_t gamme_curve[256];
 
 esp_err_t link_image_file(const char *from, const char *to) {
     // just write file name
+    ESP_LOGI(TAG, "Linking %s to %s", from, to);
     FILE *fp = fopen(to, "w");
     if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for writing");
+        ESP_LOGE(__func__, "Failed to open file for writing");
         return ESP_FAIL;
     }
     if (to[0] == '/') {
@@ -85,16 +87,16 @@ esp_err_t shuffle_images(void) {
     struct dirent *dir;
     d = opendir(storage_base_path);
     if (!d) {
-        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        ESP_LOGE(__func__, "unable to load path %s", storage_base_path);
         return ESP_FAIL;
     }
     char *filenames[16] = {0};
     char **p = filenames;
     while ((dir = readdir(d)) != NULL) {
-        ESP_LOGI(TAG, "%s", dir->d_name);
+        ESP_LOGD(TAG, "%s", dir->d_name);
         if (strncmp(dir->d_name, "img-", 4) == 0) {
             // found an image
-            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            ESP_LOGD(TAG, "Found image %s", dir->d_name);
             *p = (char*)malloc(strlen(dir->d_name) + 1);
             strcpy(*p, dir->d_name);
         }
@@ -106,17 +108,20 @@ esp_err_t shuffle_images(void) {
         cnt++;
     }
     if (cnt == 0) {
-        ESP_LOGE(TAG, "No image found");
+        ESP_LOGE(__func__, "No image found");
         return ESP_FAIL;
     }
-    srand(time(NULL));
-    int r = rand() % cnt;
+    // srand(time(NULL));
+    // int r = rand() % cnt;
+    int r = esp_random() % cnt;
     ESP_LOGI(TAG, "Randomly picked %s", filenames[r]);
     // link to filename_current_image
     // int ret = link(filenames[r], filename_current_image);
-    esp_err_t ret = link_image_file(filenames[r], filename_current_image);
+    char full_path[64];
+    sprintf(full_path, "%s/%s", storage_base_path, filenames[r]);
+    esp_err_t ret = link_image_file(full_path, filename_current_image);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filenames[r], filename_current_image, ret);
+        ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filenames[r], filename_current_image, ret);
         ret = ESP_FAIL;
     }
     // free filenames
@@ -134,16 +139,16 @@ esp_err_t random_unlink_image(void) {
     struct dirent *dir;
     d = opendir(storage_base_path);
     if (!d) {
-        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        ESP_LOGE(__func__, "unable to load path %s", storage_base_path);
         return ESP_FAIL;
     }
     char *filenames[16] = {0};
     char **p = filenames;
     while ((dir = readdir(d)) != NULL) {
-        ESP_LOGI(TAG, "%s", dir->d_name);
+        ESP_LOGD(TAG, "%s", dir->d_name);
         if (strncmp(dir->d_name, "img-", 4) == 0) {
             // found an image
-            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            ESP_LOGD(TAG, "Found image %s", dir->d_name);
             *p = (char*)malloc(strlen(dir->d_name) + 1);
             strcpy(*p, dir->d_name);
         }
@@ -155,7 +160,7 @@ esp_err_t random_unlink_image(void) {
         cnt++;
     }
     if (cnt == 0) {
-        ESP_LOGE(TAG, "No image found");
+        ESP_LOGE(__func__, "No image found");
         return ESP_FAIL;
     }
     srand(time(NULL));
@@ -164,7 +169,7 @@ esp_err_t random_unlink_image(void) {
     // unlink
     int ret = unlink(filenames[r]);
     if (ret != 0) {
-        ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filenames[r], ret);
+        ESP_LOGE(__func__, "Failed to unlink %s, r=%d", filenames[r], ret);
     }
     // free filenames
     for (int i = 0; i < cnt; i++) {
@@ -181,19 +186,51 @@ int count_image(void) {
     struct dirent *dir;
     d = opendir(storage_base_path);
     if (!d) {
-        ESP_LOGE(TAG, "unable to load path %s", storage_base_path);
+        ESP_LOGE(__func__, "unable to load path %s", storage_base_path);
         return ESP_FAIL;
     }
     int cnt = 0;
     while ((dir = readdir(d)) != NULL) {
-        ESP_LOGI(TAG, "%s", dir->d_name);
+        ESP_LOGD(TAG, "%s", dir->d_name);
         if (strncmp(dir->d_name, "img-", 4) == 0) {
             // found an image
-            ESP_LOGI(TAG, "Found image %s", dir->d_name);
+            ESP_LOGD(TAG, "Found image %s", dir->d_name);
             cnt++;
         }
     }
     return cnt;
+}
+
+void unlink_current_image(void) {
+    // read link
+    char buf[256];
+    FILE *fp = fopen(filename_current_image, "r");
+    if (!fp) {
+        ESP_LOGE(__func__, "Failed to open file %s for reading", filename_current_image);
+        return;
+    }
+    // if is not a link, use fstat to get size
+    struct stat st;
+    if (stat(filename_current_image, &st) != 0) {
+        ESP_LOGE(__func__, "Failed to stat %s", filename_current_image);
+        return;
+    }
+    if (st.st_size > 1000) {
+        ESP_LOGE(__func__, "File %s is too big to be a link", filename_current_image);
+        return;
+    }
+    // is a link
+    int rd = fread(buf, 1, sizeof(buf), fp);
+    if (rd != st.st_size) {
+        ESP_LOGE(__func__, "fread failed! expected %d bytes, got %d", st.st_size, rd);
+    }
+    buf[rd] = 0;
+    ESP_LOGI(TAG, "unlinking %s", buf);
+    int ret = unlink(buf);
+    if (ret != 0) {
+        ESP_LOGE(__func__, "Failed to unlink %s, r=%d", buf, ret);
+    }
+    shuffle_images();
 }
 
 void generate_gamme(double gamma_value) {
@@ -269,7 +306,7 @@ int draw_jpeg(uint8_t* source_buf, uint8_t *current_fb) {
     feed_buffer_pos = 0;
     rc = jd_prepare(&jd, feed_buffer, tjpgd_work, sizeof(tjpgd_work), current_fb);
     if (rc != JDR_OK) {
-        ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
+        ESP_LOGE(__func__, "JPG jd_prepare error: %s", jd_errors[rc]);
         return ESP_FAIL;
     }
 
@@ -278,7 +315,7 @@ int draw_jpeg(uint8_t* source_buf, uint8_t *current_fb) {
     // Last parameter scales        v 1 will reduce the image
     rc = jd_decomp(&jd, tjd_output, 0);
     if (rc != JDR_OK) {
-        ESP_LOGE(TAG, "JPG jd_decomp error: %s", jd_errors[rc]);
+        ESP_LOGE(__func__, "JPG jd_decomp error: %s", jd_errors[rc]);
         return ESP_FAIL;
     }
 
@@ -316,12 +353,12 @@ static uint32_t feed_buffer_file(
 esp_err_t draw_jpeg_file(const char *filename, uint8_t *current_fb) {
     fp_reading = fopen(filename, "rb");
     if (!fp_reading) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
+        ESP_LOGE(__func__, "Failed to open file %s for reading", filename);
         return ESP_FAIL;
     }
     rc = jd_prepare(&jd, feed_buffer_file, tjpgd_work, sizeof(tjpgd_work), current_fb);
     if (rc != JDR_OK) {
-        ESP_LOGE(TAG, "JPG jd_prepare error: %s", jd_errors[rc]);
+        ESP_LOGE(__func__, "JPG jd_prepare error: %s", jd_errors[rc]);
         return ESP_FAIL;
     }
 
@@ -330,7 +367,7 @@ esp_err_t draw_jpeg_file(const char *filename, uint8_t *current_fb) {
     // Last parameter scales        v 1 will reduce the image
     rc = jd_decomp(&jd, tjd_output, 0);
     if (rc != JDR_OK) {
-        ESP_LOGE(TAG, "JPG jd_decomp error: %s", jd_errors[rc]);
+        ESP_LOGE(__func__, "JPG jd_decomp error: %s", jd_errors[rc]);
         return ESP_FAIL;
     }
     vTaskDelay(0);
@@ -345,13 +382,13 @@ esp_err_t draw_jpeg_file(const char *filename, uint8_t *current_fb) {
 esp_err_t draw_raw_file(const char *filename, uint8_t *current_fb) {
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
+        ESP_LOGE(__func__, "Failed to open file %s for reading", filename);
         return ESP_FAIL;
     }
     int fb_size = epd_width() / 2 * epd_height();
     size_t rd = fread(current_fb, 1, fb_size, fp);
     if (rd != fb_size) {
-        ESP_LOGE(TAG, "fread fb failed! expected %d bytes, got %d", fb_size, rd);
+        ESP_LOGE(__func__, "fread fb failed! expected %d bytes, got %d", fb_size, rd);
     }
     fclose(fp);
     return ESP_OK;
@@ -442,7 +479,7 @@ int draw_png(uint8_t* source_buf, size_t size, uint8_t *current_fb) {
 
     r = pngle_feed(pngle, source_buf, size);
     if (r < 0) {
-        ESP_LOGE(TAG, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
+        ESP_LOGE(__func__, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
         return ESP_FAIL;
     }
     time_decomp = (esp_timer_get_time() - decode_start) / 1000;
@@ -454,7 +491,7 @@ int draw_png(uint8_t* source_buf, size_t size, uint8_t *current_fb) {
 esp_err_t draw_png_file(const char *filename, uint8_t *current_fb) {
     fp_reading = fopen(filename, "rb");
     if (!fp_reading) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
+        ESP_LOGE(__func__, "Failed to open file %s for reading", filename);
         return ESP_FAIL;
     }
     int r = 0;
@@ -472,7 +509,7 @@ esp_err_t draw_png_file(const char *filename, uint8_t *current_fb) {
         size_t bytes_read = fread(buf, 1, sizeof(buf), fp_reading);
         r = pngle_feed(pngle, buf, bytes_read);
         if (r < 0) {
-            ESP_LOGE(TAG, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
+            ESP_LOGE(__func__, "PNG pngle_feed error: %d %s", r, pngle_error(pngle));
             return ESP_FAIL;
         }
     }
@@ -491,11 +528,11 @@ esp_err_t display_source_buf() {
     ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, IMG_URL);
     int r = draw_jpeg(source_buf, fb);
     if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        ESP_LOGE(__func__, "draw as jpg failed, try to draw as png");
         r = draw_png(source_buf, data_len_total, fb);
     }
     if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as png failed");
+        ESP_LOGE(__func__, "draw as png failed");
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -509,18 +546,18 @@ esp_err_t convert_image_to_compress(const char *from, const char *to, uint8_t *c
         m_fb = (uint8_t*)heap_caps_malloc(fb_size, MALLOC_CAP_SPIRAM);
     }
     if (!m_fb) {
-        ESP_LOGE(TAG, "Failed to allocate memory for fb");
+        ESP_LOGE(__func__, "Failed to allocate memory for fb");
         return ESP_FAIL;
     }
     memset(m_fb, 0xFF, fb_size);
     // draw image to fb
     int r = draw_jpeg_file(from, m_fb);
     if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        ESP_LOGE(__func__, "draw as jpg failed, try to draw as png");
         r = draw_png_file(from, m_fb);
     }
     if (r == ESP_FAIL) {
-        ESP_LOGE(TAG, "draw as png failed");
+        ESP_LOGE(__func__, "draw as png failed");
         if (m_fb) {
             free(m_fb);
         }
@@ -541,7 +578,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
     static bool download_err = false;
     switch (evt->event_id) {
         case HTTP_EVENT_ERROR:
-            ESP_LOGE(TAG, "HTTP_EVENT_ERROR");
+            ESP_LOGE(__func__, "HTTP_EVENT_ERROR");
             break;
         case HTTP_EVENT_ON_CONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
@@ -595,7 +632,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                 fp_downloading = fopen(filename_temp_image, "wb");
                 ESP_LOGI(TAG, "Opening file %s for writing", filename_temp_image);
                 if (!fp_downloading) {
-                    ESP_LOGE(TAG, "Failed to open file for writing");
+                    ESP_LOGE(__func__, "Failed to open file for writing");
                     download_err = true;
                 }
             }
@@ -603,11 +640,11 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             // memcpy(&source_buf[data_recv], evt->data, evt->data_len);
             // Write received data into file
             if (!fp_downloading) {
-                ESP_LOGE(TAG, "fp_downloading is NULL when writing data");
+                ESP_LOGE(__func__, "fp_downloading is NULL when writing data");
             } else {
                 unsigned long written_bytes = fwrite(evt->data, 1, evt->data_len, fp_downloading);
                 if (written_bytes != evt->data_len) {
-                    ESP_LOGE(TAG, "fwrite failed! expected %d, got %d", evt->data_len, written_bytes);
+                    ESP_LOGE(__func__, "fwrite failed! expected %d, got %d", evt->data_len, written_bytes);
                     download_err = true;
                 }
             }
@@ -623,7 +660,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                 if (source_buf) {
                     esp_err_t r = display_source_buf();
                     if (r != ESP_OK) {
-                        ESP_LOGE(TAG, "display_source_buf failed");
+                        ESP_LOGE(__func__, "display_source_buf failed");
                         // return r;
                     }
                 }
@@ -631,20 +668,20 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             break;
 
         case HTTP_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED\n");
+            ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED");
             // close file
             esp_err_t *dl_ret = (esp_err_t*)evt->user_data;
             if (fp_downloading) {
                 fclose(fp_downloading);
                 time_download = (esp_timer_get_time() - time_download_start) / 1000;
                 if (time_download && data_len_total && !download_err) {
-                    ESP_LOGI("download", "%" PRIu32 "KiB in %" PRIu32 " ms, %dKiB/s", 
-                        data_len_total / 1024, time_download, data_len_total / 1024 / time_download);
+                    ESP_LOGI("download", "%" PRIu32 "KiB in %" PRIu32 " ms, %.3lfKiB/s", 
+                        data_len_total / 1024, time_download, (double)data_len_total * 1000 / 1024 / time_download);
                 }
                 *dl_ret = ESP_OK;
                 fp_downloading = NULL;
                 if (download_err) {
-                    ESP_LOGE(TAG, "Download failed, deleting file");
+                    ESP_LOGE(__func__, "Download failed, deleting file");
                     unlink(filename_temp_image);
                 } else {
                     ESP_LOGI(TAG, "Download finished, converting file");
@@ -660,23 +697,23 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     ESP_LOGI(TAG, "Converting %s to %s", filename_temp_image, filename_img);
                     esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
                     if (ret != ESP_OK) {
-                        ESP_LOGE(TAG, "convert_image_to_compress failed");
+                        ESP_LOGE(__func__, "convert_image_to_compress failed");
                         *dl_ret = ESP_FAIL;
                     } else {
                         int r;
                         r = link_image_file(filename_img, filename_current_image);
                         if (r != 0) {
-                            ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
+                            ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
                             *dl_ret = ESP_FAIL;
                         }
                         r = unlink(filename_temp_image);
                         if (r != 0) {
-                            ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filename_temp_image, r);
+                            ESP_LOGE(__func__, "Failed to unlink %s, r=%d", filename_temp_image, r);
                         }
                     }
                 }
             } else {
-                ESP_LOGE(TAG, "fp_downloading is NULL");
+                ESP_LOGW(TAG, "fp_downloading is NULL");
             }
             break;
 
@@ -707,7 +744,7 @@ static esp_err_t https_get_request_using_global_ca_store(void)
     ESP_LOGI(TAG, "https_request using global ca_store");
     esp_ret = esp_tls_set_global_ca_store(server_cert_pem_start, server_cert_pem_end - server_cert_pem_start);
     if (esp_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Error in setting the global ca store: [%02X] (%s),could not complete the https_request using global_ca_store", esp_ret, esp_err_to_name(esp_ret));
+        ESP_LOGE(__func__, "Error in setting the global ca store: [%02X] (%s),could not complete the https_request using global_ca_store", esp_ret, esp_err_to_name(esp_ret));
         return esp_ret;
     }
     esp_tls_cfg_t cfg = {
@@ -725,16 +762,16 @@ static esp_err_t https_request(void) {
     // r = https_get_request_using_cacert_buf();
     r = https_get_request_using_global_ca_store();
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "https_get_request failed");
+        ESP_LOGE(__func__, "https_get_request failed");
         return r;
     }
     if (!source_buf) {
-        ESP_LOGE(TAG, "source_buf is NULL");
+        ESP_LOGE(__func__, "source_buf is NULL");
         return ESP_FAIL;
     }
     r = display_source_buf();
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "display_source_buf failed");
+        ESP_LOGE(__func__, "display_source_buf failed");
         return r;
     }
     return ESP_OK;
@@ -781,8 +818,9 @@ static esp_err_t http_request(void) {
             TAG, "IMAGE URL: %s\nHTTP GET Status = %d, content_length = %d", downloading_url,
             esp_http_client_get_status_code(client), (int)esp_http_client_get_content_length(client)
         );
+        data_len_total = esp_http_client_get_content_length(client);
     } else {
-        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(__func__, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
 
     esp_http_client_cleanup(client);
@@ -801,7 +839,7 @@ esp_err_t download_image() {
         retry--;
         r = http_request();
         if (r != ESP_OK) {
-            ESP_LOGE(TAG, "http_post failed, retrying, retry: %d", retry);
+            ESP_LOGE(__func__, "http_post failed, retrying, retry: %d", retry);
             if (retry == 0) {
                 break;
             }
@@ -824,7 +862,7 @@ esp_err_t init_flash_storage() {
     };
     esp_err_t err = esp_vfs_spiffs_register(&conf);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount SPIFFS (%s)", esp_err_to_name(err));
+        ESP_LOGE(__func__, "Failed to mount SPIFFS (%s)", esp_err_to_name(err));
         return err;
     }
     return ESP_OK;
@@ -844,7 +882,7 @@ esp_err_t do_display(const char *filename) {
         if (st.st_size < 10000) {
             FILE *fp = fopen(filename, "r");
             if (!fp) {
-                ESP_LOGE(TAG, "Failed to open file for reading");
+                ESP_LOGE(__func__, "Failed to open file %s for reading", filename);
                 return ESP_FAIL;
             }
             int r = fread(buf, 1, sizeof(buf), fp);
@@ -857,21 +895,21 @@ esp_err_t do_display(const char *filename) {
     esp_err_t r;
     r = draw_compressed_file(linked_filename, fb);
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "draw as compressed failed, try to draw as jpg");
+        ESP_LOGE(__func__, "draw as compressed failed, try to draw as jpg");
         r = draw_jpeg_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "draw as jpg failed, try to draw as png");
+        ESP_LOGE(__func__, "draw as jpg failed, try to draw as png");
         r = draw_png_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "draw as png failed, try to draw as raw");
+        ESP_LOGE(__func__, "draw as png failed, try to draw as raw");
         r = draw_raw_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(TAG, "draw as raw failed");
+        ESP_LOGE(__func__, "draw as raw failed");
     }
-    return ESP_OK;
+    return r;
 }
 
 typedef struct display_time_info_t {
@@ -981,7 +1019,7 @@ void do_shuffle_images(void) {
     time_t now;
     time(&now);
     // get last time from `filename_last_shuffle_images'
-    FILE *fp = fopen(filename_last_shuffle_images, "r");
+    FILE *fp = fopen(filename_last_shuffle_images, "rb");
     if (fp) {
         time_t last_shuffle_time;
         fread(&last_shuffle_time, 1, sizeof(last_shuffle_time), fp);
@@ -996,7 +1034,7 @@ void do_shuffle_images(void) {
         ESP_LOGI(TAG, "Shuffle images");
         shuffle_images();
         // save current time to `filename_last_shuffle_images'
-        fp = fopen(filename_last_shuffle_images, "w");
+        fp = fopen(filename_last_shuffle_images, "wb");
         if (fp) {
             fwrite(&now, 1, sizeof(now), fp);
             fclose(fp);
@@ -1013,12 +1051,13 @@ void do_download_display(void) {
     if (!will_download) {
         time(&now);
         // get last time from `filename_last_download'
-        fp = fopen(filename_last_download, "r");
+        fp = fopen(filename_last_download, "rb");
         if (fp) {
             time_t last_download_time;
             fread(&last_download_time, 1, sizeof(last_download_time), fp);
             fclose(fp);
             if (now - last_download_time > TIME_DOWNLOAD_MINUTE * 60) {
+                ESP_LOGI(TAG, "Last download time: %lld, now: %lld, will download", last_download_time, now);
                 will_download = true;
             }
         } else {
@@ -1029,14 +1068,18 @@ void do_download_display(void) {
         ESP_LOGI(TAG, "Download image");
         esp_err_t r = download_image();
         if (r != ESP_OK) {
-            ESP_LOGE(TAG, "download_image failed");
+            ESP_LOGE(__func__, "download_image failed");
         } else {
             epd_poweron();
             epd_fullclear(&hl, TEMPERATURE);
-            do_display(filename_current_image);
+            r = do_display(filename_current_image);
+            if (r != ESP_OK) {
+                ESP_LOGE(__func__, "do_display failed, unlink current image");
+                unlink_current_image();
+            }
         }
         // save current time to `filename_last_download'
-        fp = fopen(filename_last_download, "w");
+        fp = fopen(filename_last_download, "wb");
         if (fp) {
             fwrite(&now, 1, sizeof(now), fp);
             fclose(fp);
@@ -1096,7 +1139,14 @@ void app_main(void) {
     if (d) {
         ESP_LOGI(TAG, "Files in %s:", storage_base_path);
         while ((dir = readdir(d)) != NULL) {
-            ESP_LOGI(TAG, "%s", dir->d_name);
+            // ESP_LOGD(TAG, "%s", dir->d_name);
+            // show file size
+            struct stat st;
+            char filename[128];
+            sprintf(filename, "%s/%s", storage_base_path, dir->d_name);
+            if (stat(filename, &st) == 0) {
+                ESP_LOGI(TAG, "%s, size %lld", dir->d_name, (uint64_t)(st.st_size));
+            }
         }
         closedir(d);
     }
@@ -1109,7 +1159,7 @@ void app_main(void) {
     //     } else {
     //         // if (ESP_OK != fb_load_compressed()) {
     //         if (ESP_OK != fb_load_compressed_file(filename_current_image, hl.fb_front)) {
-    //             ESP_LOGE(TAG, "fb_load_compressed failed");
+    //             ESP_LOGE(__func__, "fb_load_compressed failed");
     //         }
     //     }
     //     display_time();
@@ -1121,7 +1171,7 @@ void app_main(void) {
 
     // bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
     // if (!bg_img) {
-    //     ESP_LOGE(TAG, "Failed to allocate memory for bg");
+    //     ESP_LOGE(__func__, "Failed to allocate memory for bg");
     //     finish_system();
     //     return;
     // }
@@ -1129,7 +1179,15 @@ void app_main(void) {
     
     epd_fullclear(&hl, TEMPERATURE);
     epd_poweron();
-    do_display(filename_current_image);
+    int image_cnt = 0;
+    do {
+        ret = do_display(filename_current_image);
+        if (ret != ESP_OK) {
+            image_cnt = count_image();
+            ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
+            unlink_current_image();
+        }
+    } while (ret != ESP_OK && image_cnt > 0);
     display_time();
 
     finish_system();

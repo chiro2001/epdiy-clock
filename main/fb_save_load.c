@@ -72,7 +72,7 @@ esp_err_t fb_load() {
   // load framebuffer from file
   FILE *fp = fopen(filename_fb, "rb");
   if (!fp) {
-    ESP_LOGE(TAG, "Failed to open file for reading");
+    ESP_LOGE(TAG, "Failed to open file %s for reading", filename_fb);
     return ESP_FAIL;
   }
   int fb_size = epd_width() / 2 * epd_height();
