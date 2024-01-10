@@ -8,6 +8,7 @@ set(app_sources
   "font/time_traveler.c"
   "compress.c"
   "fb_save_load.c"
+  "request.c"
 )
 # file(GLOB_RECURSE app_resources res/*)
 
@@ -28,7 +29,9 @@ idf_component_register(
     vfs
     pngle
     zlib
-  EMBED_TXTFILES ${project_dir}/res/ssl_cert/server_cert.pem
+  EMBED_TXTFILES
+    ${project_dir}/res/ssl_cert/server_cert.pem
+    ${project_dir}/res/ssl_cert/time_server_cert.pem
 )
 
 # make compliler happy

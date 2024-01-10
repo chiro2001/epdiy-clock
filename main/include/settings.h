@@ -54,6 +54,10 @@
 #define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(1, \
                           ESP_SNTP_SERVER_LIST("ntp.chiro.work") )
 #define HTTP_RECEIVE_TIMEOUT_MS (30 * 1000)
+#define TIME_SERVER_URL "https://currentmillis.com/time/minutes-since-unix-epoch.php"
+#define TIME_SERVER_HOST "currentmillis.com"
+
+#define TIME_ZONE "CST-8"
 
 /// storage
 static const char *storage_base_path = "/spiflash";
