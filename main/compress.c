@@ -28,7 +28,7 @@ esp_err_t compress_mem_to_file_zlib(const char *filename, const uint8_t *data,
   FILE *dest = NULL;
   dest = fopen(filename, "wb");
   if (dest == NULL) {
-    ESP_LOGE(__func__, "fopen failed");
+    ESP_LOGE(__func__, "fopen %s failed", filename);
     ret = ESP_FAIL;
     goto error;
   }

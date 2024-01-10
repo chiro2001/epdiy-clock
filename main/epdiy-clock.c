@@ -577,7 +577,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             }
             // get redirect url
             if (strncmp(evt->header_key, "Location", 8) == 0) {
-                strncpy(downloading_url, evt->header_value, sizeof(downloading_url));
+                strncpy(downloading_url, evt->header_value, sizeof(downloading_url) - 1);
                 ESP_LOGI(TAG, "Redirecting to %s", downloading_url);
             }
             break;
@@ -649,23 +649,25 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     time_t now;
                     time(&now);
                     char filename_img[32];
-                    sprintf(filename_img, "/spiffs/img-%lld", now);
+                    sprintf(filename_img, "%s/img-%lld", storage_base_path, now);
                     while (count_image() >= 12) {
                         ESP_LOGI(TAG, "Too many images, randomly delete one");
                         random_unlink_image();
                     }
+                    ESP_LOGI(TAG, "Converting %s to %s", filename_temp_image, filename_img);
                     esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
                     if (ret != ESP_OK) {
                         ESP_LOGE(TAG, "convert_image_to_compress failed");
-                    }
-                    int r;
-                    r = link_image_file(filename_img, filename_current_image);
-                    if (r != 0) {
-                        ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
-                    }
-                    r = unlink(filename_temp_image);
-                    if (r != 0) {
-                        ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filename_temp_image, r);
+                    } else {
+                        int r;
+                        r = link_image_file(filename_img, filename_current_image);
+                        if (r != 0) {
+                            ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
+                        }
+                        r = unlink(filename_temp_image);
+                        if (r != 0) {
+                            ESP_LOGE(TAG, "Failed to unlink %s, r=%d", filename_temp_image, r);
+                        }
                     }
                 }
             } else {
@@ -840,10 +842,9 @@ esp_err_t do_display(const char *filename) {
     struct stat st;
     if (stat(filename, &st) == 0) {
         // file exists
-        ESP_LOGI(TAG, "File %s exists, size %lld", filename, st.st_size);
+        ESP_LOGI(TAG, "File %s exists, size %lld", filename, (uint64_t)(st.st_size));
         // small image file is a link
         if (st.st_size < 10000) {
-            // int r = readlink(filename, buf, sizeof(buf));
             FILE *fp = fopen(filename, "r");
             if (!fp) {
                 ESP_LOGE(TAG, "Failed to open file for reading");
@@ -1086,7 +1087,8 @@ void app_main(void) {
     //     return;
     // }
 
-    if (esp_reset_reason() == ESP_RST_POWERON) {
+    if (esp_reset_reason() == ESP_RST_POWERON || count_image() == 0) {
+        epd_poweron();
         ret = download_image();
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "download_image failed");
@@ -1096,18 +1098,18 @@ void app_main(void) {
             ESP_LOGI(TAG, "download_image success");
         }
     }
-    bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
-    if (!bg_img) {
-        ESP_LOGE(TAG, "Failed to allocate memory for bg");
-        finish_system();
-        return;
-    }
-    memcpy(bg_img, fb, epd_width() / 2 * epd_height());
+    // bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
+    // if (!bg_img) {
+    //     ESP_LOGE(TAG, "Failed to allocate memory for bg");
+    //     finish_system();
+    //     return;
+    // }
+    // memcpy(bg_img, fb, epd_width() / 2 * epd_height());
     
     epd_fullclear(&hl, TEMPERATURE);
+    epd_poweron();
     do_display(filename_current_image);
     display_time();
-    epd_hl_update_screen(&hl, MODE_GL16, 25);
 
     finish_system();
 }
