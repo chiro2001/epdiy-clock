@@ -19,6 +19,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "lwip/dns.h"
 #include "lwip/err.h"
@@ -39,15 +40,21 @@ extern const uint8_t
 
 #define STORAGE_NAMESPACE "storage"
 
+void set_time_zone(void) {
+  setenv("TZ", TIME_ZONE, 1);
+  tzset();
+}
+
 void print_time() {
-  // get from time()
+  set_time_zone();
   time_t now;
   struct tm timeinfo;
+  char datetime_buf[48];
+
   time(&now);
   localtime_r(&now, &timeinfo);
-  char datetime_buf[48];
   strftime(datetime_buf, sizeof(datetime_buf), "%Y-%m-%d %H:%M:%S", &timeinfo);
-  ESP_LOGI(TAG, "The current date/time is: %s", datetime_buf);
+  ESP_LOGI(TAG, "The current date/time is: %s, unix_timestamp %lld", datetime_buf, now);
 }
 
 void initialize_sntp(void) {
@@ -174,33 +181,33 @@ static esp_err_t obtain_time_http(void) {
   ESP_LOGI(TAG, "message: %s", buf);
   uint64_t unix_minute_time = 0;
   sscanf((char *)buf, "%lld", &unix_minute_time);
-  ESP_LOGI(TAG, "unix_minute_time=%lld", unix_minute_time);
+  ESP_LOGI(TAG, "unix_minute_time=%lld, unix_timestamp is %lld", unix_minute_time, unix_minute_time * 60);
   if (unix_minute_time == 0) {
     ESP_LOGE(TAG, "Error parsing time from server");
     err = ESP_FAIL;
   } else {
     struct timeval set_time;
+    struct timezone tz;
+    set_time_zone();
+    gettimeofday(&set_time, &tz);
     set_time.tv_sec = unix_minute_time * 60;
-    settimeofday(&set_time, NULL);
+    settimeofday(&set_time, &tz);
     print_time();
   }
   free(buf);
   return err;
 }
 
-void set_time_zone(void) {
-  setenv("TZ", TIME_ZONE, 1);
-  tzset();
-}
-
 esp_err_t fetch_and_store_time_in_nvs(void *args) {
+  set_time_zone();
   // initialize_sntp();
   // if (obtain_time() != ESP_OK) {
   //     return ESP_FAIL;
   // }
 
-  if (obtain_time_http() != ESP_OK) {
-    return ESP_FAIL;
+  int retry = 3;
+  while (obtain_time_http() != ESP_OK && --retry > 0) {
+    ESP_LOGE(TAG, "Failed to obtain time from server. Retrying %d...", retry);
   }
 
   nvs_handle_t my_handle;
@@ -233,7 +240,7 @@ exit:
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Error updating time in nvs");
   } else {
-    ESP_LOGI(TAG, "Updated time in NVS");
+    ESP_LOGI(TAG, "Updated time in NVS, wrote %lld", now);
   }
   return err;
 }
@@ -259,9 +266,14 @@ esp_err_t update_time_from_nvs(void) {
       err = ESP_OK;
     }
   } else if (err == ESP_OK) {
-    struct timeval get_nvs_time;
-    get_nvs_time.tv_sec = timestamp;
-    settimeofday(&get_nvs_time, NULL);
+    ESP_LOGI(TAG, "Time found in NVS. Setting time to %lld", timestamp);
+    struct timeval set_time;
+    struct timezone tz;
+    set_time_zone();
+    gettimeofday(&set_time, &tz);
+    set_time.tv_sec = timestamp;
+    settimeofday(&set_time, &tz);
+    print_time();
   }
 
 exit:
