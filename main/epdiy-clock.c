@@ -637,8 +637,10 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_DISCONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_DISCONNECTED\n");
             // close file
+            esp_err_t *dl_ret = (esp_err_t*)evt->user_data;
             if (fp_downloading) {
                 fclose(fp_downloading);
+                *dl_ret = ESP_OK;
                 fp_downloading = NULL;
                 if (download_err) {
                     ESP_LOGE(TAG, "Download failed, deleting file");
@@ -658,11 +660,13 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
                     if (ret != ESP_OK) {
                         ESP_LOGE(TAG, "convert_image_to_compress failed");
+                        *dl_ret = ESP_FAIL;
                     } else {
                         int r;
                         r = link_image_file(filename_img, filename_current_image);
                         if (r != 0) {
                             ESP_LOGE(TAG, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
+                            *dl_ret = ESP_FAIL;
                         }
                         r = unlink(filename_temp_image);
                         if (r != 0) {
@@ -761,16 +765,23 @@ static esp_err_t http_request(void) {
     }
 #endif
 
+    esp_err_t dl_ret = ESP_OK;
+    // set user_data as dl_ret
+    esp_http_client_set_user_data(client, &dl_ret);
+
     esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+        err = dl_ret;
+    }
     if (err == ESP_OK) {
         // esp_http_client_get_content_length returns a uint64_t in esp-idf v5, so it needs a %lld
         // format specifier
         ESP_LOGI(
-            TAG, "\nIMAGE URL: %s\n\nHTTP GET Status = %d, content_length = %d\n", downloading_url,
+            TAG, "IMAGE URL: %s\nHTTP GET Status = %d, content_length = %d", downloading_url,
             esp_http_client_get_status_code(client), (int)esp_http_client_get_content_length(client)
         );
     } else {
-        ESP_LOGE(TAG, "\nHTTP GET request failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
     }
 
     esp_http_client_cleanup(client);
