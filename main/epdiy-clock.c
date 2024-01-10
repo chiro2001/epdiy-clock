@@ -498,13 +498,6 @@ esp_err_t display_source_buf() {
         ESP_LOGE(TAG, "draw as png failed");
         return ESP_FAIL;
     }
-    time_download = (esp_timer_get_time() - time_download_start) / 1000;
-    ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
-
-    ESP_LOGI(
-        "total", "%" PRIu32 " ms - total time spent\n",
-        time_download + time_decomp + time_render
-    );
     return ESP_OK;
 }
 
@@ -552,6 +545,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             break;
         case HTTP_EVENT_ON_CONNECTED:
             ESP_LOGI(TAG, "HTTP_EVENT_ON_CONNECTED");
+            data_recv = 0;
+            on_data_cnt = 0;
+            download_err = false;
             break;
         case HTTP_EVENT_HEADER_SENT:
             ESP_LOGI(TAG, "HTTP_EVENT_HEADER_SENT");
@@ -587,7 +583,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_ON_DATA:
             ++on_data_cnt;
 // #if DEBUG_VERBOSE
-            if (on_data_cnt % 10 == 0) {
+            if (on_data_cnt % 10 == 0 && data_len_total) {
                 ESP_LOGI(TAG, "%d len:%d %d%%", on_data_cnt, evt->data_len, data_recv * 100 / data_len_total);
             }
 // #endif
@@ -597,6 +593,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             if (!fp_downloading) {
                 time_download_start = esp_timer_get_time();
                 fp_downloading = fopen(filename_temp_image, "wb");
+                ESP_LOGI(TAG, "Opening file %s for writing", filename_temp_image);
                 if (!fp_downloading) {
                     ESP_LOGE(TAG, "Failed to open file for writing");
                     download_err = true;
@@ -623,7 +620,6 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
         case HTTP_EVENT_ON_FINISH:
             // Do not draw if it's a redirect (302)
             if (esp_http_client_get_status_code(evt->client) == 200) {
-                data_len_total = data_recv;
                 if (source_buf) {
                     esp_err_t r = display_source_buf();
                     if (r != ESP_OK) {
@@ -640,6 +636,11 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
             esp_err_t *dl_ret = (esp_err_t*)evt->user_data;
             if (fp_downloading) {
                 fclose(fp_downloading);
+                time_download = (esp_timer_get_time() - time_download_start) / 1000;
+                if (time_download && data_len_total && !download_err) {
+                    ESP_LOGI("download", "%" PRIu32 "KiB in %" PRIu32 " ms, %dKiB/s", 
+                        data_len_total / 1024, time_download, data_len_total / 1024 / time_download);
+                }
                 *dl_ret = ESP_OK;
                 fp_downloading = NULL;
                 if (download_err) {
@@ -813,21 +814,6 @@ esp_err_t download_image() {
     return r;
 }
 
-// esp_err_t init_flash_storage_fatfs(const char *partition_label) {
-//     ESP_LOGI(TAG, "Mounting FAT filesystem");
-//     const esp_vfs_fat_mount_config_t mount_config = {
-//             .max_files = 4,
-//             .format_if_mount_failed = true,
-//             .allocation_unit_size = CONFIG_WL_SECTOR_SIZE
-//     };
-//     esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(storage_base_path, partition_label, &mount_config, &s_wl_handle);
-//     if (err != ESP_OK) {
-//         ESP_LOGE(TAG, "Failed to mount FATFS (%s)", esp_err_to_name(err));
-//         return err;
-//     }
-//     return ESP_OK;
-// }
-
 esp_err_t init_flash_storage() {
     ESP_LOGI(TAG, "Initializing SPIFFS");
     esp_vfs_spiffs_conf_t conf = {
@@ -884,15 +870,7 @@ esp_err_t do_display(const char *filename) {
     }
     if (r != ESP_OK) {
         ESP_LOGE(TAG, "draw as raw failed");
-        return ESP_FAIL;
     }
-    time_download = (esp_timer_get_time() - time_download_start) / 1000;
-    ESP_LOGI(TAG, "%" PRIu32 " ms - download", time_download);
-
-    ESP_LOGI(
-        "total", "%" PRIu32 " ms - total time spent\n",
-        time_download + time_decomp + time_render
-    );
     return ESP_OK;
 }
 
@@ -965,6 +943,7 @@ void finish_system(void) {
 }
 
 void do_clean_screen(void) {
+#if (TIME_CLEAR_MINUTE > 0)
     // clean screen every TIME_CLEAR_MINUTE
     bool will_clean = false;
     time_t now;
@@ -993,6 +972,7 @@ void do_clean_screen(void) {
             fclose(fp);
         }
     }
+#endif
 }
 
 void do_shuffle_images(void) {

@@ -62,8 +62,10 @@
 #define TIME_ZONE "CST-8"
 // #define TIME_FMT "%H:%M:%S"
 #define TIME_FMT "%H:%M"
-#define TIME_CLEAR_MINUTE 10
-#define TIME_SHUFFLE_MINUTE 30
+// 0 for not clear
+#define TIME_CLEAR_MINUTE 0
+// 0 for shuffle every minute
+#define TIME_SHUFFLE_MINUTE 0
 #define TIME_DOWNLOAD_MINUTE 60
 
 /// storage
