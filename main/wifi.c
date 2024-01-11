@@ -37,6 +37,11 @@ event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* ev
 
 // Initializes WiFi the ESP-IDF way
 void wifi_init_sta(void) {
+    static bool has_init = false;
+    if (has_init) {
+        return;
+    }
+    has_init = true;
     s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());

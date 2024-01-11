@@ -67,6 +67,7 @@
 // 0 for shuffle every minute
 #define TIME_SHUFFLE_MINUTE 0
 #define TIME_DOWNLOAD_MINUTE 60
+#define TIME_SYNC_MINUTE 20
 
 /// storage
 static const char *storage_base_path = "/spiflash";
@@ -82,6 +83,7 @@ static const char *filename_last_time = "/spiflash/last_time.dat";
 static const char *filename_last_clean_screen = "/spiflash/last_clean_screen.timestamp";
 static const char *filename_last_shuffle_images = "/spiflash/last_shuffle_images.timestamp";
 static const char *filename_last_download = "/spiflash/last_download.timestamp";
+static const char *filename_last_sync_time = "/spiflash/last_sync_time.timestamp";
 
 #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
 // #define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION

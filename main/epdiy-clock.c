@@ -874,7 +874,6 @@ esp_err_t init_flash_storage() {
 esp_err_t do_display(const char *filename) {
     // unlink filename_last_time
     unlink(filename_last_time);
-    ESP_LOGI(TAG, "%" PRIu32 " bytes read from %s", data_len_total, downloading_url);
     char *linked_filename = (char *)filename;
     char buf[128];
     struct stat st;
@@ -980,6 +979,7 @@ void finish_system(void) {
     // fb_save_compressed();
     epd_deinit();
     esp_vfs_spiffs_unregister(storage_partition_label);
+    ESP_LOGI(TAG, "FINISH! total run %lld ms", esp_timer_get_time() / 1000);
     deepsleep();
 }
 
@@ -1068,6 +1068,7 @@ void do_download_display(void) {
         }
     }
     if (will_download) {
+        wifi_init_sta();
         ESP_LOGI(TAG, "Download image");
         esp_err_t r = download_image();
         if (r != ESP_OK) {
@@ -1083,6 +1084,44 @@ void do_download_display(void) {
         }
         // save current time to `filename_last_download'
         fp = fopen(filename_last_download, "wb");
+        if (fp) {
+            fwrite(&now, 1, sizeof(now), fp);
+            fclose(fp);
+        }
+    }
+}
+
+void do_sync_time(void) {
+    // sync time every TIME_SYNC_MINUTE
+    FILE *fp = NULL;
+    bool will_sync = false;
+    if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
+        ESP_LOGI(TAG, "Wakeup not from deepsleep, force time update");
+        will_sync = true;
+    }
+    time_t now;
+    time(&now);
+    if (!will_sync) {
+        // get last time from `filename_last_sync_time'
+        fp = fopen(filename_last_sync_time, "rb");
+        if (fp) {
+            time_t last_sync_time;
+            fread(&last_sync_time, 1, sizeof(last_sync_time), fp);
+            fclose(fp);
+            if (now - last_sync_time > TIME_SYNC_MINUTE * 60) {
+                will_sync = true;
+            }
+        } else {
+            will_sync = true;
+        }
+    }
+    if (will_sync) {
+        ESP_LOGI(TAG, "Sync time");
+        wifi_init_sta();
+        fetch_and_store_time_in_nvs(NULL);
+        update_time_from_nvs();
+        // save current time to `filename_last_sync_time'
+        fp = fopen(filename_last_sync_time, "wb");
         if (fp) {
             fwrite(&now, 1, sizeof(now), fp);
             fclose(fp);
@@ -1119,16 +1158,7 @@ void app_main(void) {
     // WiFi log level set only to Error otherwise outputs too much
     esp_log_level_set("wifi", ESP_LOG_ERROR);
 
-    // Initialization: WiFi + clean screen while downloading image
-    wifi_init_sta();
-
-    // auto request and save time in NVS
-    if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
-        print_time();
-        ESP_LOGI(TAG, "Wakeup not from deepsleep, force time update");
-        fetch_and_store_time_in_nvs(NULL);
-        update_time_from_nvs();
-    }
+    do_sync_time();
     // print time now
     print_time();
 
