@@ -3,6 +3,7 @@
 #include "epdiy.h"
 #include "esp_err.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "wifi.h"
 #include "fb_save_load.h"
 #include "settings.h"
@@ -1050,7 +1051,7 @@ void do_download_display(void) {
     FILE *fp;
     time_t now;
     bool will_download = false;
-    will_download = esp_reset_reason() == ESP_RST_POWERON || count_image() == 0;
+    will_download = esp_reset_reason() != ESP_RST_DEEPSLEEP || count_image() == 0;
     if (!will_download) {
         time(&now);
         // get last time from `filename_last_download'
