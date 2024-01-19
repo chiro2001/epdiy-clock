@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include "driver/rtc_io.h"
+#include "epd_highlevel.h"
 #include "esp_adc/adc_oneshot.h"
 #include "epdiy.h"
 #include "esp_err.h"
@@ -12,6 +13,7 @@
 #include "time_sync.h"
 #include "compress.h"
 #include "request.h"
+#include <math.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -1282,7 +1284,8 @@ static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_att
 void app_test(void *args) {
     // config STICK_X_PIN & STICK_Y_PIN as ADC input
     const char *TAG = "app_test";
-    epd_clear();
+    epd_poweron();
+    epd_fullclear(&hl, TEMPERATURE);
     ESP_LOGI(TAG, "Configuring ADC pin X:%d & Y:%d", STICK_X_PIN, STICK_Y_PIN);
     adc_oneshot_unit_handle_t adc2_handle;
     adc_oneshot_unit_init_cfg_t init_config1 = {
@@ -1304,6 +1307,7 @@ void app_test(void *args) {
 
     // range: [-1.0, 1.0]
     float x = 0, y = 0;
+    float x_last = 0, y_last = 0;
     int adc_raw[2];
     int voltage[2];
     while (true) {
@@ -1322,9 +1326,24 @@ void app_test(void *args) {
             ESP_LOGD(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, STICK_Y_CHAN, voltage[1]);
         }
         x = (float)(voltage[0] + STICK_X_OFFSET - STICK_X_MIN) / (STICK_X_MAX - STICK_X_MIN) * 2 - 1;
-        y = (float)(voltage[1] + STICK_Y_OFFSET - STICK_Y_MIN) / (STICK_Y_MAX - STICK_Y_MIN) * 2 - 1;
+        y = -((float)(voltage[1] + STICK_Y_OFFSET - STICK_Y_MIN) / (STICK_Y_MAX - STICK_Y_MIN) * 2 - 1);
         ESP_LOGI(TAG, "x: %.03f, y: %.03f; vx: %04d, vy: %04d, temp: %.03f", x, y, voltage[0], voltage[1], epd_ambient_temperature());
-        vTaskDelay(pdMS_TO_TICKS(100));
+        if (fabs(x) < STICK_X_DEAD_ZONE) x = 0.0f;
+        if (fabs(y) < STICK_Y_DEAD_ZONE) y = 0.0f;
+
+        // epd_fullclear(&hl, TEMPERATURE);
+        epd_fill_circle(
+            epd_rotated_display_width() * 1.0f / 2 + x_last * epd_rotated_display_width() / 2, 
+            epd_rotated_display_height() * 1.0f / 2 + y_last * epd_rotated_display_height() / 2, 
+            5, 0xF0, fb);
+        epd_fill_circle(
+            epd_rotated_display_width() * 1.0f / 2 + x * epd_rotated_display_width() / 2, 
+            epd_rotated_display_height() * 1.0f / 2 + y * epd_rotated_display_height() / 2, 
+            5, 0x00, fb);
+        epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
+        // vTaskDelay(pdMS_TO_TICKS(100));
+        x_last = x;
+        y_last = y;
     }
     // for safety exit
     // vTaskDelete(NULL);
