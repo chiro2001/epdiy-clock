@@ -246,6 +246,26 @@ void generate_gamme(double gamma_value) {
     gamme_curve[gray_value] = round(255 * pow(gray_value / 255.0, gammaCorrection));
 }
 
+void do_epd_init() {
+    static bool esp_init_done = false;
+    if (esp_init_done) {
+        return;
+    }
+    enum EpdInitOptions init_options = EPD_LUT_64K;
+    // For V6 and below, try to use less memory. V7 queue uses less anyway.
+#ifdef CONFIG_IDF_TARGET_ESP32
+    init_options |= EPD_FEED_QUEUE_8;
+#endif
+    epd_init(&DEMO_BOARD, &DISPLAY_SCREEN_TYPE, init_options);
+    // epd_set_vcom(1560);
+    hl = epd_hl_init(WAVEFORM);
+    fb = epd_hl_get_framebuffer(&hl);
+    epd_set_rotation(DISPLAY_ROTATION);
+
+    generate_gamme(0.7);
+    esp_init_done = true;
+}
+
 /* User defined call-back function to output decoded RGB bitmap in decoded_image buffer */
 static uint32_t tjd_output(
     JDEC* jd,     /* Decompressor object of current session */
@@ -879,6 +899,7 @@ esp_err_t init_flash_storage() {
 }
 
 esp_err_t do_display(const char *filename) {
+    do_epd_init();
     // unlink filename_last_time
     unlink(filename_last_time);
     char *linked_filename = (char *)filename;
@@ -930,6 +951,7 @@ typedef struct display_time_info_t {
 #define DISPLAY_TIME_T_MAGIC 0x55aa1234
 
 void display_time() {
+    do_epd_init();
     EpdFontProperties font_props = epd_font_properties_default();
     font_props.flags = EPD_DRAW_ALIGN_CENTER | EPD_INV_BACKGROUND_BIN;
     if (bg_img) {
@@ -964,7 +986,8 @@ void display_time() {
     localtime_r(&now, &timeinfo);
     char time_text[24] = "";
     strftime(time_text, sizeof(info.text), TIME_FMT, &timeinfo);
-    sprintf(info.text, "%s-%02d", time_text, esp_random() % 100);
+    // sprintf(info.text, "%s-%02d", time_text, esp_random() % 100);
+    sprintf(info.text, "%s", time_text);
     ESP_LOGI(TAG, "Display %s at (%d, %d)", info.text, info.x, info.y);
 
     epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
@@ -1108,8 +1131,8 @@ bool do_download_display(void) {
             download_done = false;
         } else {
             download_done = true;
-            epd_poweron();
-            epd_fullclear(&hl, TEMPERATURE);
+            // epd_poweron();
+            // epd_fullclear(&hl, TEMPERATURE);
             r = do_display(filename_current_image);
             if (r != ESP_OK) {
                 ESP_LOGE(__func__, "do_display failed, unlink current image");
@@ -1211,18 +1234,8 @@ void app_main(void) {
     esp_err_t ret;
     ESP_LOGI(TAG, "START!");
     print_reset_reason();
-    enum EpdInitOptions init_options = EPD_LUT_64K;
-    // For V6 and below, try to use less memory. V7 queue uses less anyway.
-#ifdef CONFIG_IDF_TARGET_ESP32
-    init_options |= EPD_FEED_QUEUE_8;
-#endif
-    epd_init(&DEMO_BOARD, &DISPLAY_SCREEN_TYPE, init_options);
-    // epd_set_vcom(1560);
-    hl = epd_hl_init(WAVEFORM);
-    fb = epd_hl_get_framebuffer(&hl);
-    epd_set_rotation(DISPLAY_ROTATION);
 
-    generate_gamme(0.7);
+    do_epd_init();
 
     // Initialize NVS
     ret = nvs_flash_init();
@@ -1250,8 +1263,8 @@ void app_main(void) {
     bool download_done = do_download_display();
 
     if (!download_done) {
-        epd_clear();
-        epd_poweron();
+        // epd_clear();
+        // epd_poweron();
         int image_cnt = 0;
         do {
             ret = do_display(filename_current_image);
