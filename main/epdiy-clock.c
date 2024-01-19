@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include "driver/rtc_io.h"
 #include "epdiy.h"
 #include "esp_err.h"
 #include "esp_random.h"
@@ -170,10 +171,12 @@ esp_err_t random_unlink_image(void) {
     srand(time(NULL));
     int r = rand() % cnt;
     ESP_LOGI(TAG, "Randomly picked %s", filenames[r]);
+    char path[64] = "";
+    sprintf(path, "%s/%s", storage_base_path, filenames[r]);
     // unlink
-    int ret = unlink(filenames[r]);
+    int ret = unlink(path);
     if (ret != 0) {
-        ESP_LOGE(__func__, "Failed to unlink %s, r=%d", filenames[r], ret);
+        ESP_LOGE(__func__, "Failed to unlink %s, r=%d", path, ret);
     }
     // free filenames
     for (int i = 0; i < cnt; i++) {
@@ -694,9 +697,12 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     time(&now);
                     char filename_img[32];
                     sprintf(filename_img, "%s/img-%lld", storage_base_path, now);
-                    while (count_image() >= 12) {
+                    while (count_image() >= 10) {
                         ESP_LOGI(TAG, "Too many images, randomly delete one");
-                        random_unlink_image();
+                        esp_err_t ret = random_unlink_image();
+                        if (ret != ESP_OK) {
+                            break;
+                        }
                     }
                     ESP_LOGI(TAG, "Converting %s to %s", filename_temp_image, filename_img);
                     esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
@@ -847,7 +853,7 @@ esp_err_t download_image() {
             if (retry == 0) {
                 break;
             }
-            fetch_and_store_time_in_nvs(NULL);
+            // fetch_and_store_time_in_nvs(NULL);
             print_time();
         } else {
             break;
@@ -971,6 +977,26 @@ void display_time() {
     }
 }
 
+esp_err_t setup_wakeup_int(void) {
+    // init switch button as pull-up input
+    const int ext_wakeup_pin_1 = PIN_BUTTON;
+    const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
+    ESP_LOGI(TAG, "Enabling EXT1 wakeup on pins GPIO%d\n", ext_wakeup_pin_1);
+    const esp_sleep_ext1_wakeup_mode_t ext_wakeup_mode = ESP_EXT1_WAKEUP_ALL_LOW;
+    rtc_gpio_isolate(GPIO_NUM_12);
+    ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask, ext_wakeup_mode));
+
+    if (ext_wakeup_mode) {
+        ESP_ERROR_CHECK(rtc_gpio_pullup_dis(ext_wakeup_pin_1));
+        ESP_ERROR_CHECK(rtc_gpio_pulldown_en(ext_wakeup_pin_1));
+    } else {
+        ESP_ERROR_CHECK(rtc_gpio_pulldown_dis(ext_wakeup_pin_1));
+        ESP_ERROR_CHECK(rtc_gpio_pullup_en(ext_wakeup_pin_1));
+    }
+    // TODO: init stick x & y ADC wakeup trigger
+    return ESP_OK;
+}
+
 void finish_system(void) {
     epd_poweron();
     // finally update screen
@@ -980,6 +1006,7 @@ void finish_system(void) {
     // fb_save_compressed();
     epd_deinit();
     esp_vfs_spiffs_unregister(storage_partition_label);
+    setup_wakeup_int();
     ESP_LOGI(TAG, "FINISH! total run %lld ms", esp_timer_get_time() / 1000);
     deepsleep();
 }
@@ -1130,9 +1157,28 @@ void do_sync_time(void) {
     }
 }
 
+void print_reset_reason(void) {
+    esp_reset_reason_t reset_reason = esp_reset_reason();   
+    const char *reason = "err";
+    if (reset_reason == ESP_RST_POWERON) reason = "power on";
+    if (reset_reason == ESP_RST_EXT) reason = "external";
+    if (reset_reason == ESP_RST_SW) reason = "software";
+    if (reset_reason == ESP_RST_PANIC) reason = "panic";
+    if (reset_reason == ESP_RST_INT_WDT) reason = "interrupt watchdog";
+    if (reset_reason == ESP_RST_TASK_WDT) reason = "task watchdog";
+    if (reset_reason == ESP_RST_WDT) reason = "watchdog";
+    if (reset_reason == ESP_RST_DEEPSLEEP) reason = "deepsleep";
+    if (reset_reason == ESP_RST_BROWNOUT) reason = "brownout";
+    if (reset_reason == ESP_RST_SDIO) reason = "sdio";
+    if (reset_reason == ESP_RST_UNKNOWN) reason = "unknown";
+    ESP_LOGI(TAG, "Wakeup reason: %s", reason);
+}
+
 void app_main(void) {
-  ESP_LOGI(TAG, "START!");
-  enum EpdInitOptions init_options = EPD_LUT_64K;
+    esp_err_t ret;
+    ESP_LOGI(TAG, "START!");
+    print_reset_reason();
+    enum EpdInitOptions init_options = EPD_LUT_64K;
     // For V6 and below, try to use less memory. V7 queue uses less anyway.
 #ifdef CONFIG_IDF_TARGET_ESP32
     init_options |= EPD_FEED_QUEUE_8;
@@ -1146,7 +1192,7 @@ void app_main(void) {
     generate_gamme(0.7);
 
     // Initialize NVS
-    esp_err_t ret = nvs_flash_init();
+    ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();

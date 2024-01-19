@@ -1,4 +1,5 @@
 #include "common.h"
+#include "esp_sleep.h"
 
 void deepsleep() {
   printf("Go to sleep %d minutes\n", DEEPSLEEP_MINUTES_AFTER_RENDER);

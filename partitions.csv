@@ -4,5 +4,5 @@ nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 # 1.25 MiB (0x140000) for app
 factory,  app,  factory, 0x10000, 0x140000,
-# tail 12 MiB for flash storage, total 16 MiB
-storage,  data, spiffs,  0x400000,0xC00000,
+# tail for flash storage, total 16 MiB
+storage,  data, spiffs,  0x200000,0xC00000,
