@@ -962,8 +962,11 @@ void display_time() {
     // show time of 1min later
     now += 60;
     localtime_r(&now, &timeinfo);
-    strftime(info.text, sizeof(info.text), TIME_FMT, &timeinfo);
-    ESP_LOGI(TAG, "Display current time: %s at (%d, %d)", info.text, info.x, info.y);
+    char time_text[24] = "";
+    strftime(time_text, sizeof(info.text), TIME_FMT, &timeinfo);
+    sprintf(info.text, "%s-%02d", time_text, esp_random() % 100);
+    ESP_LOGI(TAG, "Display %s at (%d, %d)", info.text, info.x, info.y);
+
     epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
     // save to filename_last_time
     fp = fopen(filename_last_time, "w");
@@ -1000,7 +1003,7 @@ esp_err_t setup_wakeup_int(void) {
 void finish_system(void) {
     epd_poweron();
     // finally update screen
-    epd_hl_update_screen(&hl, MODE_GC16, 25);
+    epd_hl_update_screen(&hl, MODE_GC16, TEMPERATURE);
     // epd_hl_update_screen(&hl, MODE_GL16, 25);
     epd_poweroff();
     // fb_save_compressed();
@@ -1073,12 +1076,13 @@ void do_shuffle_images(void) {
     }
 }
 
-void do_download_display(void) {
+bool do_download_display(void) {
     // download image ever TIME_DOWNLOAD_MINUTE
     FILE *fp;
     time_t now;
     bool will_download = false;
     will_download = esp_reset_reason() != ESP_RST_DEEPSLEEP || count_image() == 0;
+    bool download_done = false;
     if (!will_download) {
         time(&now);
         // get last time from `filename_last_download'
@@ -1101,13 +1105,16 @@ void do_download_display(void) {
         esp_err_t r = download_image();
         if (r != ESP_OK) {
             ESP_LOGE(__func__, "download_image failed");
+            download_done = false;
         } else {
+            download_done = true;
             epd_poweron();
             epd_fullclear(&hl, TEMPERATURE);
             r = do_display(filename_current_image);
             if (r != ESP_OK) {
                 ESP_LOGE(__func__, "do_display failed, unlink current image");
                 unlink_current_image();
+                download_done = false;
             }
         }
         // save current time to `filename_last_download'
@@ -1115,8 +1122,11 @@ void do_download_display(void) {
         if (fp) {
             fwrite(&now, 1, sizeof(now), fp);
             fclose(fp);
+        } else {
+            download_done = false;
         }
     }
+    return download_done;
 }
 
 void do_sync_time(void) {
@@ -1174,6 +1184,29 @@ void print_reset_reason(void) {
     ESP_LOGI(TAG, "Wakeup reason: %s", reason);
 }
 
+void list_files(void) {
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(storage_base_path);
+    if (d) {
+        ESP_LOGI(TAG, "Files in %s:", storage_base_path);
+        while ((dir = readdir(d)) != NULL) {
+            // show file size
+            struct stat st;
+            char filename[128];
+            sprintf(filename, "%s/%s", storage_base_path, dir->d_name);
+            if (stat(filename, &st) == 0) {
+                if (st.st_size < 1024) {
+                    ESP_LOGI(TAG, "\t%lld B\t%s", (uint64_t)(st.st_size), dir->d_name);
+                } else {
+                    ESP_LOGI(TAG, "\t%lld KiB\t%s", (uint64_t)(st.st_size) / 1024, dir->d_name);
+                }
+            }
+        }
+        closedir(d);
+    }
+}
+
 void app_main(void) {
     esp_err_t ret;
     ESP_LOGI(TAG, "START!");
@@ -1209,65 +1242,26 @@ void app_main(void) {
     // print time now
     print_time();
 
+    list_files();
+
     do_clean_screen();
     do_shuffle_images();
 
-    // list files
-    DIR *d;
-    struct dirent *dir;
-    d = opendir(storage_base_path);
-    if (d) {
-        ESP_LOGI(TAG, "Files in %s:", storage_base_path);
-        while ((dir = readdir(d)) != NULL) {
-            // ESP_LOGD(TAG, "%s", dir->d_name);
-            // show file size
-            struct stat st;
-            char filename[128];
-            sprintf(filename, "%s/%s", storage_base_path, dir->d_name);
-            if (stat(filename, &st) == 0) {
-                ESP_LOGI(TAG, "%s, size %lld", dir->d_name, (uint64_t)(st.st_size));
+    bool download_done = do_download_display();
+
+    if (!download_done) {
+        epd_clear();
+        epd_poweron();
+        int image_cnt = 0;
+        do {
+            ret = do_display(filename_current_image);
+            if (ret != ESP_OK) {
+                image_cnt = count_image();
+                ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
+                unlink_current_image();
             }
-        }
-        closedir(d);
+        } while (ret != ESP_OK && image_cnt > 0);
     }
-
-    // {
-    //     if (esp_reset_reason() == ESP_RST_POWERON) {
-    //         ESP_LOGI(TAG, "Power on reset, reload buffers");
-    //         epd_poweron();
-    //         do_display(filename_current_image);
-    //     } else {
-    //         // if (ESP_OK != fb_load_compressed()) {
-    //         if (ESP_OK != fb_load_compressed_file(filename_current_image, hl.fb_front)) {
-    //             ESP_LOGE(__func__, "fb_load_compressed failed");
-    //         }
-    //     }
-    //     display_time();
-    //     finish_system();
-    //     return;
-    // }
-
-    do_download_display();
-
-    // bg_img = (uint8_t*)heap_caps_malloc(epd_width() / 2 * epd_height(), MALLOC_CAP_SPIRAM);
-    // if (!bg_img) {
-    //     ESP_LOGE(__func__, "Failed to allocate memory for bg");
-    //     finish_system();
-    //     return;
-    // }
-    // memcpy(bg_img, fb, epd_width() / 2 * epd_height());
-    
-    epd_fullclear(&hl, TEMPERATURE);
-    epd_poweron();
-    int image_cnt = 0;
-    do {
-        ret = do_display(filename_current_image);
-        if (ret != ESP_OK) {
-            image_cnt = count_image();
-            ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
-            unlink_current_image();
-        }
-    } while (ret != ESP_OK && image_cnt > 0);
     display_time();
 
     finish_system();
