@@ -9,6 +9,7 @@ set(app_sources
   "compress.c"
   "fb_save_load.c"
   "request.c"
+  "joysticks.c"
 )
 # file(GLOB_RECURSE app_resources res/*)
 

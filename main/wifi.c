@@ -12,6 +12,9 @@ static int s_retry_num = 0;
 
 static const char *TAG = "wifi";
 
+// it's one-byte veriable, so it's safe to use it without mutex...maybe
+static bool has_inited = false;
+
 static void
 event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -35,13 +38,17 @@ event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* ev
     }
 }
 
+void wifi_stop_sta(void) {
+    ESP_ERROR_CHECK(esp_wifi_stop());
+}
+
 // Initializes WiFi the ESP-IDF way
-void wifi_init_sta(void) {
-    static bool has_init = false;
-    if (has_init) {
+void wifi_start_sta(void) {
+    if (has_inited) {
+        ESP_ERROR_CHECK(esp_wifi_start());
         return;
     }
-    has_init = true;
+    has_inited = true;
     s_wifi_event_group = xEventGroupCreate();
 
     ESP_ERROR_CHECK(esp_netif_init());

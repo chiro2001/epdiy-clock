@@ -3,6 +3,8 @@
 
 #include "common.h"
 
-void wifi_init_sta(void);
+void wifi_start_sta(void);
+void wifi_stop_sta(void);
+bool wifi_is_started(void);
 
 #endif

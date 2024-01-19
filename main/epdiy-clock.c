@@ -13,6 +13,7 @@
 #include "time_sync.h"
 #include "compress.h"
 #include "request.h"
+#include "joysticks.h"
 #include <math.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -635,7 +636,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     // }
                     // printf("Free heap after buffers allocation: %X\n", xPortGetFreeHeapSize());
                 } else {
-                    ESP_LOGW("main", "Content-Length header is empty!");
+                    ESP_LOGI("main", "Content-Length header is 0, maybe a redirect");
                 }
             }
             // get redirect url
@@ -863,6 +864,7 @@ static esp_err_t http_request(void) {
 
 
 esp_err_t download_image() {
+    wifi_start_sta();
     // handle http request
     // esp_err_t r = http_request();
     // esp_err_t r = https_request();
@@ -872,7 +874,7 @@ esp_err_t download_image() {
         retry--;
         r = http_request();
         if (r != ESP_OK) {
-            ESP_LOGE(__func__, "http_post failed, retrying, retry: %d", retry);
+            ESP_LOGW(__func__, "http_post failed, retrying, retry: %d", retry);
             if (retry == 0) {
                 break;
             }
@@ -882,6 +884,10 @@ esp_err_t download_image() {
             break;
         }
     } while (r != ESP_OK && retry > 0);
+    if (r != ESP_OK) {
+        ESP_LOGE(__func__, "http_post failed");
+    }
+    wifi_stop_sta();
     return r;
 }
 
@@ -1126,8 +1132,7 @@ bool do_download_display(void) {
         }
     }
     if (will_download) {
-        wifi_init_sta();
-        ESP_LOGI(TAG, "Download image");
+        ESP_LOGI(TAG, "start downloading image");
         esp_err_t r = download_image();
         if (r != ESP_OK) {
             ESP_LOGE(__func__, "download_image failed");
@@ -1173,6 +1178,7 @@ void do_sync_time(void) {
             fread(&last_sync_time, 1, sizeof(last_sync_time), fp);
             fclose(fp);
             if (now - last_sync_time > TIME_SYNC_MINUTE * 60) {
+                ESP_LOGI(TAG, "Last sync time: %lld, now: %lld, delta: %lld s, will sync", last_sync_time, now, now - last_sync_time);
                 will_sync = true;
             }
         } else {
@@ -1181,7 +1187,7 @@ void do_sync_time(void) {
     }
     if (will_sync) {
         ESP_LOGI(TAG, "Sync time");
-        wifi_init_sta();
+        wifi_start_sta();
         fetch_and_store_time_in_nvs(NULL);
         update_time_from_nvs();
         // save current time to `filename_last_sync_time'
@@ -1233,133 +1239,12 @@ void list_files(void) {
     }
 }
 
-static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle) {
-    adc_cali_handle_t handle = NULL;
-    esp_err_t ret = ESP_FAIL;
-    bool calibrated = false;
-
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated) {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
-        adc_cali_curve_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .chan = channel,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
-            calibrated = true;
-        }
-    }
-#endif
-
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated) {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
-        adc_cali_line_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
-            calibrated = true;
-        }
-    }
-#endif
-
-    *out_handle = handle;
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Calibration Success");
-    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
-        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
-    } else {
-        ESP_LOGE(TAG, "Invalid arg or no memory");
-    }
-
-    return calibrated;
-}
-
-void app_test(void *args) {
-    // config STICK_X_PIN & STICK_Y_PIN as ADC input
-    const char *TAG = "app_test";
-    epd_poweron();
-    epd_fullclear(&hl, TEMPERATURE);
-    ESP_LOGI(TAG, "Configuring ADC pin X:%d & Y:%d", STICK_X_PIN, STICK_Y_PIN);
-    adc_oneshot_unit_handle_t adc2_handle;
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_2,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc2_handle));
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = SOC_ADC_RTC_MAX_BITWIDTH,
-        .atten = ADC_ATTEN_DB_11,
-    };
-    adc_oneshot_config_channel(adc2_handle, STICK_X_CHAN, &config);
-    adc_oneshot_config_channel(adc2_handle, STICK_Y_CHAN, &config);
-    
-    adc_cali_handle_t adc2_cali_chan0_handle = NULL;
-    adc_cali_handle_t adc2_cali_chan1_handle = NULL;
-    bool do_calibration1_chan0 = adc_calibration_init(ADC_UNIT_1, STICK_X_CHAN, STICK_ATTEN, &adc2_cali_chan0_handle);
-    bool do_calibration1_chan1 = adc_calibration_init(ADC_UNIT_1, STICK_Y_CHAN, STICK_ATTEN, &adc2_cali_chan1_handle);
-
-    // range: [-1.0, 1.0]
-    float x = 0, y = 0;
-    float x_last = 0, y_last = 0;
-    int adc_raw[2];
-    int voltage[2];
-    while (true) {
-        ESP_ERROR_CHECK(adc_oneshot_read(adc2_handle, STICK_X_CHAN, &adc_raw[0]));
-        ESP_LOGD(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, STICK_X_CHAN, adc_raw[0]);
-        if (do_calibration1_chan0) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc2_cali_chan0_handle, adc_raw[0], &voltage[0]));
-            ESP_LOGD(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, STICK_X_CHAN, voltage[0]);
-        }
-        // vTaskDelay(pdMS_TO_TICKS(1000));
-
-        ESP_ERROR_CHECK(adc_oneshot_read(adc2_handle, STICK_Y_CHAN, &adc_raw[1]));
-        ESP_LOGD(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, STICK_Y_CHAN, adc_raw[1]);
-        if (do_calibration1_chan1) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc2_cali_chan1_handle, adc_raw[1], &voltage[1]));
-            ESP_LOGD(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, STICK_Y_CHAN, voltage[1]);
-        }
-        x = (float)(voltage[0] + STICK_X_OFFSET - STICK_X_MIN) / (STICK_X_MAX - STICK_X_MIN) * 2 - 1;
-        y = -((float)(voltage[1] + STICK_Y_OFFSET - STICK_Y_MIN) / (STICK_Y_MAX - STICK_Y_MIN) * 2 - 1);
-        ESP_LOGI(TAG, "x: %.03f, y: %.03f; vx: %04d, vy: %04d, temp: %.03f", x, y, voltage[0], voltage[1], epd_ambient_temperature());
-        if (fabs(x) < STICK_X_DEAD_ZONE) x = 0.0f;
-        if (fabs(y) < STICK_Y_DEAD_ZONE) y = 0.0f;
-
-        // epd_fullclear(&hl, TEMPERATURE);
-        epd_fill_circle(
-            epd_rotated_display_width() * 1.0f / 2 + x_last * epd_rotated_display_width() / 2, 
-            epd_rotated_display_height() * 1.0f / 2 + y_last * epd_rotated_display_height() / 2, 
-            5, 0xF0, fb);
-        epd_fill_circle(
-            epd_rotated_display_width() * 1.0f / 2 + x * epd_rotated_display_width() / 2, 
-            epd_rotated_display_height() * 1.0f / 2 + y * epd_rotated_display_height() / 2, 
-            5, 0x00, fb);
-        epd_hl_update_screen(&hl, MODE_GL16, TEMPERATURE);
-        // vTaskDelay(pdMS_TO_TICKS(100));
-        x_last = x;
-        y_last = y;
-    }
-    // for safety exit
-    // vTaskDelete(NULL);
-}
-
 void app_main(void) {
     esp_err_t ret;
     ESP_LOGI(TAG, "START!");
     print_reset_reason();
 
     do_epd_init();
-
-    // launch app_test task
-    // xTaskCreate(app_test, "app_test", 1024 * 2, NULL, 5, NULL);
-    app_test(NULL);
-    return;
 
     // Initialize NVS
     ret = nvs_flash_init();
@@ -1368,6 +1253,9 @@ void app_main(void) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // launch task_joysticks task
+    xTaskCreate(task_joysticks, "task_joysticks", 1024 * 2, NULL, 5, NULL);
 
     // Initializaze Flash Storage
     ESP_ERROR_CHECK(init_flash_storage());
