@@ -73,6 +73,7 @@ uint8_t gamme_curve[256];
 
 esp_err_t nvs_write_str(const char *key, const char *value) {
     nvs_handle_t nvs_handle;
+    uint32_t nvs_start = esp_timer_get_time();
     esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
     if (err != ESP_OK) {
         ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
@@ -82,11 +83,16 @@ esp_err_t nvs_write_str(const char *key, const char *value) {
     if (err != ESP_OK) {
         ESP_LOGE(__func__, "Failed to write %s to NVS", key);
     }
+    uint32_t nvs_write = esp_timer_get_time();
     err = nvs_commit(nvs_handle);
     if (err != ESP_OK) {
         ESP_LOGE(__func__, "Failed to commit NVS");
     }
+    uint32_t nvs_commit = esp_timer_get_time();
     nvs_close(nvs_handle);
+    uint32_t nvs_closed = esp_timer_get_time();
+    ESP_LOGI(__func__, "nvs_write_str %s: write %d ms, commit %d ms, close %d ms", key, 
+        (nvs_write - nvs_start) / 1000, (nvs_commit - nvs_write) / 1000, (nvs_closed - nvs_commit) / 1000);
     return err;
 }
 
@@ -149,10 +155,26 @@ esp_err_t nvs_read_u64(const char *key, uint64_t *value) {
     return err;
 }
 
-esp_err_t link_image_file_to_key(const char *content, const char *to) {
+esp_err_t update_last_image(void) {
+    char current[32] = "";
+    size_t current_len = sizeof(current);
+    nvs_read_str(key_current_image, current, &current_len);
+    esp_err_t err = nvs_write_str(key_last_image, current);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to write %s to NVS", key_current_image);
+    }
+    return err;
+}
+
+esp_err_t link_current_image_file(const char *content) {
     // just write file name
-    ESP_LOGI(TAG, "Linking %s to %s", content, to);
-    return nvs_write_str(to, content);
+    ESP_LOGI(TAG, "Linking %s to %s", content, key_current_image);
+    esp_err_t err = update_last_image();
+    err = nvs_write_str(key_current_image, content);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to write %s to NVS", key_current_image);
+    }
+    return err;
 }
 
 esp_err_t shuffle_images(void) {
@@ -210,7 +232,7 @@ esp_err_t shuffle_images(void) {
     // int ret = link(filenames[r], filename_current_image);
     char full_path[64];
     sprintf(full_path, "%s/%s", storage_base_path, filenames[r]);
-    esp_err_t ret = link_image_file_to_key(full_path, key_current_image);
+    esp_err_t ret = link_current_image_file(full_path);
     if (ret != ESP_OK) {
         ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filenames[r], key_current_image, ret);
         ret = ESP_FAIL;
@@ -757,6 +779,7 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
 
         case HTTP_EVENT_ON_FINISH:
             // Do not draw if it's a redirect (302)
+            ESP_LOGI(TAG, "HTTP_EVENT_ON_FINISH, status_code=%d", esp_http_client_get_status_code(evt->client));
             if (esp_http_client_get_status_code(evt->client) == 200) {
                 if (source_buf) {
                     esp_err_t r = display_source_buf();
@@ -785,42 +808,13 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                     ESP_LOGE(__func__, "Download failed, deleting file");
                     unlink(filename_temp_image);
                 } else {
-                    ESP_LOGI(TAG, "Download finished, converting file");
-                    // unix_timestamp as filename
-                    time_t now;
-                    time(&now);
-                    char filename_img[32];
-                    sprintf(filename_img, "%s/img-%lld", storage_base_path, now);
-                    while (count_image() >= 10) {
-                        ESP_LOGI(TAG, "Too many images, randomly delete one");
-                        esp_err_t ret = random_unlink_image();
-                        if (ret != ESP_OK) {
-                            break;
-                        }
-                    }
-                    ESP_LOGI(TAG, "Converting %s to %s", filename_temp_image, filename_img);
-                    esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
-                    if (ret != ESP_OK) {
-                        ESP_LOGE(__func__, "convert_image_to_compress failed");
-                        *dl_ret = ESP_FAIL;
-                    } else {
-                        int r;
-                        r = link_image_file_to_key(filename_img, key_current_image);
-                        if (r != 0) {
-                            ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filename_img, key_current_image, r);
-                            *dl_ret = ESP_FAIL;
-                        }
-                        r = unlink(filename_temp_image);
-                        if (r != 0) {
-                            ESP_LOGE(__func__, "Failed to unlink %s, r=%d", filename_temp_image, r);
-                        }
-                    }
+                    ESP_LOGI(TAG, "Download finished");
                 }
             } else {
                 ESP_LOGI(TAG, "fp_downloading is NULL when disconnecting");
             }
+            ESP_LOGI(TAG, "Disconnected");
             break;
-
         default:
             ESP_LOGI(TAG, "HTTP_EVENT_ fallback caught event %d", evt->event_id);
     }
@@ -939,7 +933,7 @@ esp_err_t download_image() {
     // esp_err_t r = http_request();
     // esp_err_t r = https_request();
     esp_err_t r;
-    int retry = 3;
+    int retry = HTTP_RECEIVE_RETRY;
     do {
         retry--;
         r = http_request();
@@ -951,7 +945,39 @@ esp_err_t download_image() {
             // fetch_and_store_time_in_nvs(NULL);
             print_time();
         } else {
-            break;
+            // unix_timestamp as filename
+            time_t now;
+            time(&now);
+            char filename_img[32];
+            sprintf(filename_img, "%s/img-%lld", storage_base_path, now);
+            while (count_image() >= 10) {
+                ESP_LOGI(TAG, "Too many images, randomly delete one");
+                esp_err_t ret = random_unlink_image();
+                if (ret != ESP_OK) {
+                    break;
+                }
+            }
+            ESP_LOGI(TAG, "Converting %s to %s", filename_temp_image, filename_img);
+            esp_err_t ret = convert_image_to_compress(filename_temp_image, filename_img, fb);
+            if (ret != ESP_OK) {
+                ESP_LOGE(__func__, "convert_image_to_compress failed");
+                r = ESP_FAIL;
+            } else {
+                ESP_LOGI(TAG, "Image converted, linking to %s", key_current_image);
+                int r;
+                r = link_current_image_file(filename_img);
+                if (r != 0) {
+                    ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filename_img, key_current_image, r);
+                    r = ESP_FAIL;
+                }
+                // r = unlink(filename_temp_image);
+                // if (r != 0) {
+                //     ESP_LOGE(__func__, "Failed to unlink %s, r=%d", filename_temp_image, r);
+                // }
+            }
+            if (r == ESP_OK) {
+                break;
+            }
         }
     } while (r != ESP_OK && retry > 0);
     if (r != ESP_OK) {
@@ -977,19 +1003,20 @@ esp_err_t init_flash_storage() {
     return ESP_OK;
 }
 
-esp_err_t do_display(const char *filename) {
+esp_err_t do_display(const char *filename, uint8_t *fb) {
     do_epd_init();
     char buf[32];
     size_t buf_len = sizeof(buf);
     char *linked_filename = (char *)filename;
     struct stat st;
-    if (key_current_image == filename || strcmp(filename, key_current_image) == 0) {
+    if (key_current_image == filename || strcmp(filename, key_current_image) == 0 ||
+        key_last_image == filename || strcmp(filename, key_last_image) == 0) {
         // get current image from nvs
-        nvs_read_str(key_current_image, buf, &buf_len);
+        nvs_read_str(filename, buf, &buf_len);
         if (buf_len > 0) {
             linked_filename = buf;
         } else {
-            ESP_LOGE(__func__, "Failed to read %s link", key_current_image);
+            ESP_LOGE(__func__, "Failed to read %s link", filename);
             return ESP_FAIL;
         }
     } else if (stat(filename, &st) == 0) {
@@ -1036,26 +1063,39 @@ void display_time() {
     }
     // font_props.fg_color = 0xf;
     display_time_info info;
+    display_time_info info_last;
 
     info.x = epd_rotated_display_width() / 2;
     info.y = epd_rotated_display_height() / 2 + 100;
 
-    // if file `filename_last_time' exists, re-draw it
-    // fp = fopen(filename_last_time, "r");
-    // if (fp) {
-    //     fread(&info_last, 1, sizeof(info_last), fp);
-    //     if (info_last.magic == DISPLAY_TIME_T_MAGIC) {
-    //         ESP_LOGI(TAG, "Last time: %s at (%d, %d)", info_last.text, info_last.x, info_last.y);
-    //         epd_write_string(font, info_last.text, &info_last.x, &info_last.y, fb, &font_props);
-    //     }
-    //     fclose(fp);
-    // }
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS handle for %s", nvs_namespace);
+        return;
+    }
+    // read last info
+    size_t len = sizeof(info_last);
+    err = nvs_get_blob(nvs_handle, key_last_time, &info_last, &len);
+    if (err == ESP_OK) {
+        err = do_display(key_last_image, hl.back_fb);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "do_display failed");
+            memset(hl.back_fb, 0xFF, epd_width() / 2 * epd_height());
+        } else {
+            // draw last time on back
+            ESP_LOGI(TAG, "Display last frame %s at (%d, %d)", info_last.text, info_last.x, info_last.y);
+            epd_write_string(font, info_last.text, &info_last.x, &info_last.y, hl.back_fb, &font_props);
+        }
+    }
+    err = do_display(key_current_image, hl.front_fb);
+    update_last_image();
 
     time_t now;
     struct tm timeinfo;
     time(&now);
-    // show time of 1min later
-    now += 60;
+    // display time cost TIME_DISPLAY_OFFSET_SEC seconds
+    now += TIME_DISPLAY_OFFSET_SEC;
     localtime_r(&now, &timeinfo);
     char time_text[24] = "";
     strftime(time_text, sizeof(info.text), TIME_FMT, &timeinfo);
@@ -1065,18 +1105,14 @@ void display_time() {
 
     epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
     // save to key_last_time
-    nvs_handle_t nvs_handle;
-    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    // reset pos
+    info.x = epd_rotated_display_width() / 2;
+    info.y = epd_rotated_display_height() / 2 + 150;
+    err = nvs_set_blob(nvs_handle, key_last_time, &info, sizeof(info));
     if (err == ESP_OK) {
-        // reset pos
-        info.x = epd_rotated_display_width() / 2;
-        info.y = epd_rotated_display_height() / 2 + 150;
-        err = nvs_set_blob(nvs_handle, key_last_time, &info, sizeof(info));
-        if (err == ESP_OK) {
-            err = nvs_commit(nvs_handle);
-        }
-        nvs_close(nvs_handle);
+        err = nvs_commit(nvs_handle);
     }
+    nvs_close(nvs_handle);
 }
 
 esp_err_t setup_wakeup_int(void) {
@@ -1168,6 +1204,22 @@ void do_shuffle_images(void) {
         if (err != ESP_OK) {
             ESP_LOGE(__func__, "nvs_write_u64 failed");
         }
+        nvs_handle_t nvs_handle;
+        err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to open NVS handle for %s", nvs_namespace);
+            return;
+        }
+        // clear `key_last_image`
+        err = nvs_erase_key(nvs_handle, key_last_image);
+        if (err != ESP_OK) {
+            ESP_LOGE(__func__, "nvs_erase_key failed");
+        }
+        err = nvs_commit(nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(__func__, "nvs_commit failed");
+        }
+        nvs_close(nvs_handle);
     }
 }
 
@@ -1201,7 +1253,7 @@ bool do_download_display(void) {
             download_done = true;
             // epd_poweron();
             // epd_fullclear(&hl, TEMPERATURE);
-            r = do_display(key_current_image);
+            r = do_display(key_current_image, hl.front_fb);
             if (r != ESP_OK) {
                 ESP_LOGE(__func__, "do_display failed, unlink current image");
                 unlink_current_image();
@@ -1219,7 +1271,6 @@ bool do_download_display(void) {
 
 void do_sync_time(void) {
     // sync time every TIME_SYNC_MINUTE
-    FILE *fp = NULL;
     bool will_sync = false;
     if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {
         ESP_LOGI(TAG, "Wakeup not from deepsleep, force time update");
@@ -1293,6 +1344,23 @@ void list_files(void) {
     }
 }
 
+void do_display_img_time(bool download_done) {
+    // if (!download_done) {
+    //     // epd_clear();
+    //     // epd_poweron();
+    //     int image_cnt = 0;
+    //     do {
+    //         ret = do_display(key_current_image);
+    //         if (ret != ESP_OK) {
+    //             image_cnt = count_image();
+    //             ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
+    //             unlink_current_image();
+    //         }
+    //     } while (ret != ESP_OK && image_cnt > 0);
+    // }
+    display_time();
+}
+
 void app_main(void) {
     esp_err_t ret;
     ESP_LOGI(TAG, "START!");
@@ -1328,20 +1396,7 @@ void app_main(void) {
 
     bool download_done = do_download_display();
 
-    if (!download_done) {
-        // epd_clear();
-        // epd_poweron();
-        int image_cnt = 0;
-        do {
-            ret = do_display(key_current_image);
-            if (ret != ESP_OK) {
-                image_cnt = count_image();
-                ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
-                unlink_current_image();
-            }
-        } while (ret != ESP_OK && image_cnt > 0);
-    }
-    display_time();
+    do_display_img_time(download_done);
 
     finish_system();
 }

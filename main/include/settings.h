@@ -74,7 +74,8 @@
 //                           ESP_SNTP_SERVER_LIST("ntp.chiro.work", "cn.pool.ntp.org", "time.windows.com") )
 #define NTP_SERVER_CONFIG ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(1, \
                           ESP_SNTP_SERVER_LIST("ntp.chiro.work") )
-#define HTTP_RECEIVE_TIMEOUT_MS (30 * 1000)
+#define HTTP_RECEIVE_TIMEOUT_MS (6 * 1000)
+#define HTTP_RECEIVE_RETRY 5
 // #define TIME_SERVER_URL "https://currentmillis.com/time/minutes-since-unix-epoch.php"
 // #define TIME_SERVER_HOST "currentmillis.com"
 #define TIME_SERVER_URL "http://worldtimeapi.org/api/timezone/Asia/Shanghai"
@@ -82,14 +83,15 @@
 
 /// time
 #define TIME_ZONE "CST-8"
-// #define TIME_FMT "%H:%M:%S"
-#define TIME_FMT "%H:%M"
+#define TIME_FMT "%H:%M:%S"
+// #define TIME_FMT "%H:%M"
 // 0 for not clear
 #define TIME_CLEAR_MINUTE 0
 // 0 for shuffle every minute
 #define TIME_SHUFFLE_MINUTE 0
 #define TIME_DOWNLOAD_MINUTE 60
 #define TIME_SYNC_MINUTE 20
+#define TIME_DISPLAY_OFFSET_SEC 10
 
 /// storage
 static const char *nvs_namespace = "storage";
@@ -98,7 +100,8 @@ static const char *storage_base_path = "/spiflash";
 static const char *storage_partition_label = "storage";
 static const char *filename_temp_image = "/spiflash/temp";
 
-static const char *key_current_image = "current";
+static const char *key_current_image = "i_current";
+static const char *key_last_image = "i_last";
 static const char *key_last_time = "t_time";
 static const char *key_last_clean_screen = "t_cl_screen";
 static const char *key_last_shuffle_images = "t_sh_images";
