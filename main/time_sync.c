@@ -39,8 +39,6 @@ extern const uint8_t
 extern const uint8_t
     time_server_cert_pem_end[] asm("_binary_time_server_cert_pem_end");
 
-#define STORAGE_NAMESPACE "storage"
-
 void set_time_zone(void) {
   setenv("TZ", TIME_ZONE, 1);
   tzset();
@@ -259,7 +257,7 @@ esp_err_t fetch_and_store_time_in_nvs(void *args) {
   time(&now);
 
   // Open
-  err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &my_handle);
+  err = nvs_open(nvs_namespace, NVS_READWRITE, &my_handle);
   if (err != ESP_OK) {
     goto exit;
   }
@@ -291,7 +289,7 @@ esp_err_t update_time_from_nvs(void) {
   nvs_handle_t my_handle;
   esp_err_t err;
 
-  err = nvs_open(STORAGE_NAMESPACE, NVS_READWRITE, &my_handle);
+  err = nvs_open(nvs_namespace, NVS_READWRITE, &my_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Error opening NVS");
     goto exit;

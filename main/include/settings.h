@@ -92,20 +92,23 @@
 #define TIME_SYNC_MINUTE 20
 
 /// storage
+static const char *nvs_namespace = "storage";
+
 static const char *storage_base_path = "/spiflash";
 static const char *storage_partition_label = "storage";
-static const char *filename_current_image = "/spiflash/current";
-static const char *filename_fallback_image = "/spiflash/fallback";
 static const char *filename_temp_image = "/spiflash/temp";
+
+static const char *key_current_image = "current";
+static const char *key_last_time = "t_time";
+static const char *key_last_clean_screen = "t_cl_screen";
+static const char *key_last_shuffle_images = "t_sh_images";
+static const char *key_last_download = "t_download";
+static const char *key_last_sync_time = "t_synctime";
+
 static const char *filename_fb = "/spiflash/fb.raw";
 static const char *filename_fb_compressed_front = "/spiflash/fb_front.miniz";
 static const char *filename_fb_compressed_back = "/spiflash/fb_back.miniz";
 static const char *filename_fb_compressed_diff = "/spiflash/fb_diff.miniz";
-static const char *filename_last_time = "/spiflash/last_time.dat";
-static const char *filename_last_clean_screen = "/spiflash/last_clean_screen.timestamp";
-static const char *filename_last_shuffle_images = "/spiflash/last_shuffle_images.timestamp";
-static const char *filename_last_download = "/spiflash/last_download.timestamp";
-static const char *filename_last_sync_time = "/spiflash/last_sync_time.timestamp";
 
 #define FRAME_COMPRESS_LEVEL Z_BEST_SPEED
 // #define FRAME_COMPRESS_LEVEL Z_NO_COMPRESSION

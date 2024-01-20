@@ -7,6 +7,7 @@
 #include "esp_err.h"
 #include "esp_random.h"
 #include "esp_system.h"
+#include "nvs.h"
 #include "wifi.h"
 #include "fb_save_load.h"
 #include "settings.h"
@@ -70,25 +71,92 @@ static const char* jd_errors[] = {
 
 uint8_t gamme_curve[256];
 
-esp_err_t link_image_file(const char *from, const char *to) {
+esp_err_t nvs_write_str(const char *key, const char *value) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_str(nvs_handle, key, value);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to write %s to NVS", key);
+    }
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to commit NVS");
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+esp_err_t nvs_read_str(const char *key, char *value, size_t *len) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_get_str(nvs_handle, key, value, len);
+    ESP_LOGI(__func__, "Read %s from NVS key %s, len %d", key, value, len ? *len : 0);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(__func__, "No value for %s, clear str", key);
+        value[0] = 0;
+        err = ESP_OK;
+        *len = 0;
+    } else if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to read %s from NVS: 0x%x", key, err);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+esp_err_t nvs_write_u64(const char *key, uint64_t value) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_u64(nvs_handle, key, value);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to write %s to NVS: 0x%x", key, err);
+    }
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to commit NVS");
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+esp_err_t nvs_read_u64(const char *key, uint64_t *value) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_get_u64(nvs_handle, key, value);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(__func__, "No value for %s, clear u64", key);
+        *value = 0;
+        err = ESP_OK;
+    } else if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to read %s from NVS: 0x%x", key, err);
+    }
+    nvs_close(nvs_handle);
+    return err;
+}
+
+esp_err_t link_image_file_to_key(const char *content, const char *to) {
     // just write file name
-    ESP_LOGI(TAG, "Linking %s to %s", from, to);
-    FILE *fp = fopen(to, "w");
-    if (!fp) {
-        ESP_LOGE(__func__, "Failed to open file for writing");
-        return ESP_FAIL;
-    }
-    if (to[0] == '/') {
-        fprintf(fp, "%s", from);
-    } else {
-        fprintf(fp, "%s/%s", storage_base_path, from);
-    }
-    fclose(fp);
-    return ESP_OK;
+    ESP_LOGI(TAG, "Linking %s to %s", content, to);
+    return nvs_write_str(to, content);
 }
 
 esp_err_t shuffle_images(void) {
-    // list all img-*, then randomly link one to `filename_current_image'
+    // list all img-*, then randomly link one to `key_current_image'
     DIR *d;
     struct dirent *dir;
     d = opendir(storage_base_path);
@@ -96,14 +164,23 @@ esp_err_t shuffle_images(void) {
         ESP_LOGE(__func__, "unable to load path %s", storage_base_path);
         return ESP_FAIL;
     }
+    char current[32] = "";
+    size_t current_len = sizeof(current);
+    nvs_read_str(key_current_image, current, &current_len);
     char *filenames[16] = {0};
     memset(filenames, 0, sizeof(filenames));
     char **p = filenames;
+    int prefix_len = strlen(storage_base_path) + 1;
     while ((dir = readdir(d)) != NULL) {
         ESP_LOGD(TAG, "%s", dir->d_name);
         if (strncmp(dir->d_name, "img-", 4) == 0) {
             // found an image
             ESP_LOGD(TAG, "Found image %s", dir->d_name);
+            if (strcmp(dir->d_name, current + prefix_len) == 0) {
+                // skip current image
+                ESP_LOGD(TAG, "Skipping current image %s", dir->d_name);
+                continue;
+            }
             *p = (char*)malloc(strlen(dir->d_name) + 1);
             strcpy(*p, dir->d_name);
             p++;
@@ -114,6 +191,12 @@ esp_err_t shuffle_images(void) {
     int cnt = 0;
     while (filenames[cnt]) {
         cnt++;
+    }
+    if (cnt == 0 && current_len != 0) {
+        ESP_LOGI(TAG, "No image except current image found: %s", current + prefix_len);
+        filenames[0] = (char*)malloc(current_len + 1);
+        strcpy(filenames[0], current + prefix_len);
+        cnt = 1;
     }
     if (cnt == 0) {
         ESP_LOGE(__func__, "No image found");
@@ -127,9 +210,9 @@ esp_err_t shuffle_images(void) {
     // int ret = link(filenames[r], filename_current_image);
     char full_path[64];
     sprintf(full_path, "%s/%s", storage_base_path, filenames[r]);
-    esp_err_t ret = link_image_file(full_path, filename_current_image);
+    esp_err_t ret = link_image_file_to_key(full_path, key_current_image);
     if (ret != ESP_OK) {
-        ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filenames[r], filename_current_image, ret);
+        ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filenames[r], key_current_image, ret);
         ret = ESP_FAIL;
     }
     // free filenames
@@ -212,36 +295,23 @@ int count_image(void) {
     return cnt;
 }
 
-void unlink_current_image(void) {
-    // read link
-    char buf[256];
-    FILE *fp = fopen(filename_current_image, "r");
-    if (!fp) {
-        ESP_LOGE(__func__, "Failed to open file %s for reading", filename_current_image);
-        return;
+esp_err_t unlink_current_image(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Error (%s) opening NVS handle!", esp_err_to_name(err));
+        return err;
     }
-    // if is not a link, use fstat to get size
-    struct stat st;
-    if (stat(filename_current_image, &st) != 0) {
-        ESP_LOGE(__func__, "Failed to stat %s", filename_current_image);
-        return;
+    err = nvs_erase_key(nvs_handle, key_current_image);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to erase %s from NVS", key_current_image);
     }
-    if (st.st_size > 1000) {
-        ESP_LOGE(__func__, "File %s is too big to be a link", filename_current_image);
-        return;
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(__func__, "Failed to commit NVS");
     }
-    // is a link
-    int rd = fread(buf, 1, sizeof(buf), fp);
-    if (rd != st.st_size) {
-        ESP_LOGE(__func__, "fread failed! expected %d bytes, got %d", st.st_size, rd);
-    }
-    buf[rd] = 0;
-    ESP_LOGI(TAG, "unlinking %s", buf);
-    int ret = unlink(buf);
-    if (ret != 0) {
-        ESP_LOGE(__func__, "Failed to unlink %s, r=%d", buf, ret);
-    }
-    shuffle_images();
+    nvs_close(nvs_handle);
+    return shuffle_images();
 }
 
 void generate_gamme(double gamma_value) {
@@ -735,9 +805,9 @@ esp_err_t _http_event_handler(esp_http_client_event_t* evt) {
                         *dl_ret = ESP_FAIL;
                     } else {
                         int r;
-                        r = link_image_file(filename_img, filename_current_image);
+                        r = link_image_file_to_key(filename_img, key_current_image);
                         if (r != 0) {
-                            ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filename_img, filename_current_image, r);
+                            ESP_LOGE(__func__, "Failed to link %s to %s, r=%d", filename_img, key_current_image, r);
                             *dl_ret = ESP_FAIL;
                         }
                         r = unlink(filename_temp_image);
@@ -909,55 +979,51 @@ esp_err_t init_flash_storage() {
 
 esp_err_t do_display(const char *filename) {
     do_epd_init();
-    // unlink filename_last_time
-    unlink(filename_last_time);
+    char buf[32];
+    size_t buf_len = sizeof(buf);
     char *linked_filename = (char *)filename;
-    char buf[128];
     struct stat st;
-    if (stat(filename, &st) == 0) {
+    if (key_current_image == filename || strcmp(filename, key_current_image) == 0) {
+        // get current image from nvs
+        nvs_read_str(key_current_image, buf, &buf_len);
+        if (buf_len > 0) {
+            linked_filename = buf;
+        } else {
+            ESP_LOGE(__func__, "Failed to read %s link", key_current_image);
+            return ESP_FAIL;
+        }
+    } else if (stat(filename, &st) == 0) {
         // file exists
         ESP_LOGI(TAG, "File %s exists, size %lld", filename, (uint64_t)(st.st_size));
-        // small image file is a link
-        if (st.st_size < 10000) {
-            FILE *fp = fopen(filename, "r");
-            if (!fp) {
-                ESP_LOGE(__func__, "Failed to open file %s for reading", filename);
-                return ESP_FAIL;
-            }
-            int r = fread(buf, 1, sizeof(buf), fp);
-            fclose(fp);
-            buf[r] = 0;
-            ESP_LOGI(TAG, "File %s is a link to %s", filename, buf);
-            linked_filename = buf;
-        }
+    } else {
+        ESP_LOGE(TAG, "File %s does not exist", filename);
+        return ESP_FAIL;
     }
     esp_err_t r;
     r = draw_compressed_file(linked_filename, fb);
     if (r != ESP_OK) {
-        ESP_LOGE(__func__, "draw as compressed failed, try to draw as jpg");
+        ESP_LOGE(__func__, "%s draw as compressed failed, try to draw as jpg", linked_filename);
         r = draw_jpeg_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(__func__, "draw as jpg failed, try to draw as png");
+        ESP_LOGE(__func__, "%s draw as jpg failed, try to draw as png", linked_filename);
         r = draw_png_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(__func__, "draw as png failed, try to draw as raw");
+        ESP_LOGE(__func__, "%s draw as png failed, try to draw as raw", linked_filename);
         r = draw_raw_file(linked_filename, fb);
     }
     if (r != ESP_OK) {
-        ESP_LOGE(__func__, "draw as raw failed");
+        ESP_LOGE(__func__, "%s draw as raw failed", linked_filename);
     }
     return r;
 }
 
 typedef struct display_time_info_t {
-    uint32_t magic;
     int x;
     int y;
     char text[24];
 } display_time_info;
-#define DISPLAY_TIME_T_MAGIC 0x55aa1234
 
 void display_time() {
     do_epd_init();
@@ -970,8 +1036,6 @@ void display_time() {
     }
     // font_props.fg_color = 0xf;
     display_time_info info;
-    // display_time_info info_last;
-    FILE *fp;
 
     info.x = epd_rotated_display_width() / 2;
     info.y = epd_rotated_display_height() / 2 + 100;
@@ -1000,15 +1064,18 @@ void display_time() {
     ESP_LOGI(TAG, "Display %s at (%d, %d)", info.text, info.x, info.y);
 
     epd_write_string(font, info.text, &info.x, &info.y, fb, &font_props);
-    // save to filename_last_time
-    fp = fopen(filename_last_time, "w");
-    if (fp) {
+    // save to key_last_time
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err == ESP_OK) {
         // reset pos
         info.x = epd_rotated_display_width() / 2;
         info.y = epd_rotated_display_height() / 2 + 150;
-        info.magic = DISPLAY_TIME_T_MAGIC;
-        fwrite(&info, 1, sizeof(info), fp);
-        fclose(fp);
+        err = nvs_set_blob(nvs_handle, key_last_time, &info, sizeof(info));
+        if (err == ESP_OK) {
+            err = nvs_commit(nvs_handle);
+        }
+        nvs_close(nvs_handle);
     }
 }
 
@@ -1084,12 +1151,9 @@ void do_shuffle_images(void) {
     bool will_shuffle = false;
     time_t now;
     time(&now);
-    // get last time from `filename_last_shuffle_images'
-    FILE *fp = fopen(filename_last_shuffle_images, "rb");
-    if (fp) {
-        time_t last_shuffle_time;
-        fread(&last_shuffle_time, 1, sizeof(last_shuffle_time), fp);
-        fclose(fp);
+    time_t last_shuffle_time;
+    esp_err_t err = nvs_read_u64(key_last_shuffle_images, (uint64_t*)&last_shuffle_time);
+    if (err == ESP_OK) {
         if (now - last_shuffle_time > TIME_SHUFFLE_MINUTE * 60) {
             will_shuffle = true;
         }
@@ -1099,30 +1163,26 @@ void do_shuffle_images(void) {
     if (will_shuffle) {
         ESP_LOGI(TAG, "Shuffle images");
         shuffle_images();
-        // save current time to `filename_last_shuffle_images'
-        fp = fopen(filename_last_shuffle_images, "wb");
-        if (fp) {
-            fwrite(&now, 1, sizeof(now), fp);
-            fclose(fp);
+        // save current time to `key_last_shuffle_images'
+        err = nvs_write_u64(key_last_shuffle_images, now);
+        if (err != ESP_OK) {
+            ESP_LOGE(__func__, "nvs_write_u64 failed");
         }
     }
 }
 
 bool do_download_display(void) {
     // download image ever TIME_DOWNLOAD_MINUTE
-    FILE *fp;
     time_t now;
+    time_t last_download_time;
     bool will_download = false;
     will_download = esp_reset_reason() != ESP_RST_DEEPSLEEP || count_image() == 0;
     bool download_done = false;
     if (!will_download) {
         time(&now);
-        // get last time from `filename_last_download'
-        fp = fopen(filename_last_download, "rb");
-        if (fp) {
-            time_t last_download_time;
-            fread(&last_download_time, 1, sizeof(last_download_time), fp);
-            fclose(fp);
+        // get last time from `key_last_download'
+        esp_err_t err = nvs_read_u64(key_last_download, (uint64_t*)&last_download_time);
+        if (err == ESP_OK) {
             if (now - last_download_time > TIME_DOWNLOAD_MINUTE * 60) {
                 ESP_LOGI(TAG, "Last download time: %lld, now: %lld, will download", last_download_time, now);
                 will_download = true;
@@ -1141,19 +1201,16 @@ bool do_download_display(void) {
             download_done = true;
             // epd_poweron();
             // epd_fullclear(&hl, TEMPERATURE);
-            r = do_display(filename_current_image);
+            r = do_display(key_current_image);
             if (r != ESP_OK) {
                 ESP_LOGE(__func__, "do_display failed, unlink current image");
                 unlink_current_image();
                 download_done = false;
             }
         }
-        // save current time to `filename_last_download'
-        fp = fopen(filename_last_download, "wb");
-        if (fp) {
-            fwrite(&now, 1, sizeof(now), fp);
-            fclose(fp);
-        } else {
+        // save current time to `key_last_download'
+        esp_err_t err = nvs_write_u64(key_last_download, now);
+        if (err != ESP_OK) {
             download_done = false;
         }
     }
@@ -1169,14 +1226,12 @@ void do_sync_time(void) {
         will_sync = true;
     }
     time_t now;
+    time_t last_sync_time;
     time(&now);
     if (!will_sync) {
-        // get last time from `filename_last_sync_time'
-        fp = fopen(filename_last_sync_time, "rb");
-        if (fp) {
-            time_t last_sync_time;
-            fread(&last_sync_time, 1, sizeof(last_sync_time), fp);
-            fclose(fp);
+        // get last time from `key_last_sync_time'
+        esp_err_t err = nvs_read_u64(key_last_sync_time, (uint64_t*)&last_sync_time);
+        if (err == ESP_OK) {
             if (now - last_sync_time > TIME_SYNC_MINUTE * 60) {
                 ESP_LOGI(TAG, "Last sync time: %lld, now: %lld, delta: %lld s, will sync", last_sync_time, now, now - last_sync_time);
                 will_sync = true;
@@ -1190,11 +1245,10 @@ void do_sync_time(void) {
         wifi_start_sta();
         fetch_and_store_time_in_nvs(NULL);
         update_time_from_nvs();
-        // save current time to `filename_last_sync_time'
-        fp = fopen(filename_last_sync_time, "wb");
-        if (fp) {
-            fwrite(&now, 1, sizeof(now), fp);
-            fclose(fp);
+        // save current time to `key_last_sync_time'
+        esp_err_t err = nvs_write_u64(key_last_sync_time, now);
+        if (err != ESP_OK) {
+            ESP_LOGE(__func__, "nvs_write_u64 failed");
         }
     }
 }
@@ -1267,7 +1321,7 @@ void app_main(void) {
     // print time now
     print_time();
 
-    list_files();
+    // list_files();
 
     do_clean_screen();
     do_shuffle_images();
@@ -1279,7 +1333,7 @@ void app_main(void) {
         // epd_poweron();
         int image_cnt = 0;
         do {
-            ret = do_display(filename_current_image);
+            ret = do_display(key_current_image);
             if (ret != ESP_OK) {
                 image_cnt = count_image();
                 ESP_LOGE(__func__, "do_display failed, unlink current image, image_cnt=%d", image_cnt);
